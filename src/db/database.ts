@@ -116,10 +116,39 @@ const MIGRATIONS: string[] = [
   DROP TABLE credentials;
   ALTER TABLE credentials_v3 RENAME TO credentials;
   `,
+  // 004: target model (v2 Phase 1) — knowledge graph + append-only delta chain
+  `
+  CREATE TABLE IF NOT EXISTS model_nodes (
+    target_id TEXT NOT NULL,
+    node_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT,
+    value_json TEXT NOT NULL,
+    provenance TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, node_key)
+  );
+  CREATE TABLE IF NOT EXISTS model_deltas (
+    target_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    op TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    node_key TEXT NOT NULL,
+    state TEXT,
+    value_json TEXT,
+    provenance TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    prev_hash TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    PRIMARY KEY (target_id, seq)
+  );
+  `,
 ];
 
 export class Database {
   private readonly db: DatabaseSync;
+  /** Raw handle — used only by the TargetModel store (same process, same writer). */
+  get handle(): DatabaseSync { return this.db; }
   readonly path: string;
 
   constructor(dataDir: string) {
