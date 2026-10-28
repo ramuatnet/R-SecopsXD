@@ -14,6 +14,7 @@ import { OWASP_CATEGORIES, ALL_CATEGORIES } from '../core/owasp.ts';
 import type { OwaspCategory, ScanMode, Target, ValidationStatus } from '../core/types.ts';
 import { renderReport } from '../reports/registry.ts';
 import { diffScanFindings } from '../scan/diff.ts';
+import { TargetModel } from '../model/targetModel.ts';
 
 export interface App {
   config: Config;
@@ -286,6 +287,26 @@ export function targetDiff(app: App): Handler {
       added: diff.added,
       removed: diff.removed,
       unchanged: diff.unchanged,
+    });
+  };
+}
+
+export function targetModel(app: App): Handler {
+  return (ctx: RequestContext) => {
+    const target = app.db.getTarget(ctx.params.id!);
+    if (!target) bad(404, 'not_found', 'target not found');
+    const model = new TargetModel(app.db.handle, target.id);
+    const nodes = model.nodes();
+    return jsonResponse({
+      target: { id: target.id, name: target.name },
+      summary: {
+        present: nodes.filter((n) => n.state === 'present').length,
+        absent: nodes.filter((n) => n.state === 'absent').length,
+        unknown: nodes.filter((n) => n.state === 'unknown').length,
+      },
+      nodes,
+      deltas: model.deltas().length,
+      note: 'unknown never means absent — every unknown capability is a probe that has not run yet.',
     });
   };
 }

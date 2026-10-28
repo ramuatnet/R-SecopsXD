@@ -10,6 +10,7 @@ Drive it with a system prompt such as:
 
 Order matters. Build the control loop (Phase 3) before the Rust port (Phase 4/12). The loop is the differentiator; Rust is the performance layer.
 Status legend: [ ] todo · [~] in progress · [x] done · [!] blocked.
+Progress log: 2026-10-28 — T0.2 done (CI). T0.1 blocked (no cargo on host). T1.1–T1.4 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial (recursion plumbing via corpus, no sub-scan spawn yet).
 Every capability is "done" only when its execution path, evidence, and tests exist. No relabeling missing work as done.
 1. Invariants (non-negotiable — regression-test these)
 I1 Single egress. All engine HTTP passes one scoped client that consults: payload guard → scope check (every redirect hop) → rate limit → concurrency cap → redaction.
@@ -154,31 +155,31 @@ cloud.* — S3/GCS/Azure/IMDS/marker probes
 shutdown
 8. Task board
 Phase 0 — Foundations
- T0.1 Create engine/ Rust workspace (cargo new --lib rsec-engine; bins rsec-engine, rsec-probe). Crates: tokio, hyper + hyper-rustls, h2, reqwest (fallback), serde/serde_json, pest, regex, bytes, dashmap, tracing, anyhow/thiserror, clap, uuid, base64, sha2. Pin versions. Accept: cargo build clean; cargo clippy -D warnings clean.
- T0.2 CI: GitHub Actions for TS (tsc --noEmit, npm test) + Rust (cargo test, clippy, fmt --check). Accept: green on PR.
+ [!] T0.1 Create engine/ Rust workspace (cargo new --lib rsec-engine; bins rsec-engine, rsec-probe). Crates: tokio, hyper + hyper-rustls, h2, reqwest (fallback), serde/serde_json, pest, regex, bytes, dashmap, tracing, anyhow/thiserror, clap, uuid, base64, sha2. Pin versions. Accept: cargo build clean; cargo clippy -D warnings clean.
+ [x] T0.2 CI: GitHub Actions for TS (tsc --noEmit, npm test) + Rust (cargo test, clippy, fmt --check). Accept: green on PR.
  T0.3 engine/proto/v1.md (see §7) + serde structs. Accept: schema doc + structs compile.
  T0.4 TS EngineBridge: spawn/supervise rsec-engine, framed JSON-RPC, timeout, restart-on-crash. Accept: integration test round-trips ping + one http.get.
  T0.5 Trace correlation: scan_id + action_id propagated TS↔Rust. Accept: a scan yields one correlated trace.
 Phase 1 — Target Model (understand present / absent / unknown)
- T1.1 src/model/targetModel.ts: node/edge types — Asset, Endpoint, Param, Tech, AuthSurface, CloudHint, Capability, Unknown, Exposure. New versioned DB tables. Accept: CRUD + migration up/down tests.
- T1.2 Tri-state knowledge: every capability field is present | absent | unknown (never assumed). Accept: fresh target has zero present, N unknown.
- T1.3 src/model/merge.ts: idempotent evidence→model merge; conflict resolution (newer wins, provenance kept). Accept: replaying evidence twice = no diff.
- T1.4 Delta emitter: each loop iteration writes a signed model delta. Accept: delta reconstructs model from empty.
- T1.5 GET /api/targets/:id/model + UI view (graph + unknowns panel). Accept: API test; UI renders unknowns honestly.
+ [x] T1.1 src/model/targetModel.ts: node/edge types — Asset, Endpoint, Param, Tech, AuthSurface, CloudHint, Capability, Unknown, Exposure. New versioned DB tables. Accept: CRUD + migration up/down tests.
+ [x] T1.2 Tri-state knowledge: every capability field is present | absent | unknown (never assumed). Accept: fresh target has zero present, N unknown.
+ [x] T1.3 src/model/merge.ts (mergeEvidence in targetModel.ts): idempotent evidence→model merge; conflict resolution (newer wins, provenance kept). Accept: replaying evidence twice = no diff.
+ [x] T1.4 Delta emitter: each loop iteration writes a signed model delta. Accept: delta reconstructs model from empty.
+ [x] T1.5 GET /api/targets/:id/model + UI view (graph + unknowns panel). Accept: API test; UI renders unknowns honestly.
 Phase 2 — Capability Probe Gate (kill the "webapp assumed" bias)
- T2.1 src/model/probeGate.ts: ordered, cheap, safe probes flipping unknown→present|absent for: HTTP server, HTML frontend, SPA/JS app, REST/OpenAPI, GraphQL, SOAP/WSDL, WebSocket, gRPC-web, auth (form/token/SSO), cookies/session, CDN/WAF, cloud markers (S3/GCS/Azure, IMDS, /.well-known), container/K8s markers. One bounded request each. Accept: fixture tests; a source-only target reports HTTP absent.
- T2.2 Non-HTTP target kinds: api, source, cloud-account, cidr, container-image, k8s-cluster; extend TargetKind + gate branches. Accept: profile/target-kind matrix tests.
- T2.3 "Absence is evidence" report section: what was probed-for and found absent, with the probe used. Accept: report snapshot test.
- T2.4 Gate budget: max probes/iterations, all safety-gated. Accept: budget test.
+ [x] T2.1 src/model/probeGate.ts: ordered, cheap, safe probes flipping unknown→present|absent for: HTTP server, HTML frontend, SPA/JS app, REST/OpenAPI, GraphQL, SOAP/WSDL, WebSocket, gRPC-web, auth (form/token/SSO), cookies/session, CDN/WAF, cloud markers (S3/GCS/Azure, IMDS, /.well-known), container/K8s markers. One bounded request each. Accept: fixture tests; a source-only target reports HTTP absent.
+ [~] T2.2 Non-HTTP target kinds: api, source, cloud-account, cidr, container-image, k8s-cluster; extend TargetKind + gate branches. Accept: profile/target-kind matrix tests.
+ [x] T2.3 "Absence is evidence" report section: what was probed-for and found absent, with the probe used. Accept: report snapshot test.
+ [x] T2.4 Gate budget: max probes/iterations, all safety-gated. Accept: budget test.
 Phase 3 — The Autonomous Loop (control plane)
- T3.0 Finalize engine/proto/v1.md (§7). Accept: schema frozen + versioned.
- T3.1 src/loop/planner.ts: candidate-action generation from the model (one generator per gap type). Accept: unit test per generator.
- T3.2 src/loop/decide.ts: scoring P(worth)*info_gain/cost, safety + budget gated, deterministic tie-break. Accept: scoring unit tests.
- T3.3 src/loop/loop.ts: sense→model→decide→act→verify→adapt with closure
+ [ ] T3.0 Finalize engine/proto/v1.md (frozen with Phase 4) (§7). Accept: schema frozen + versioned.
+ [x] T3.1 src/loop/planner.ts: candidate-action generation from the model (one generator per gap type). Accept: unit test per generator.
+ [x] T3.2 src/loop/decide.ts: scoring P(worth)*info_gain/cost, safety + budget gated, deterministic tie-break. Accept: scoring unit tests.
+ [x] T3.3 src/loop/loop.ts: sense→model→decide→act→verify→adapt with closure
 budget governor + per-iteration audit + delta. Accept: e2e loop terminates by closure; asserts ≥1 adapt-driven follow-up.
- T3.4 Recursion: act() may enqueue sub-scans (new scope roots) inheriting safety; depth + fan-out caps. Accept: nested-path fixture triggers sub-scan; caps enforced.
- T3.5 Novelty filter: dedupe actions/results by fingerprint. Accept: repeated discovery doesn't re-queue.
- T3.6 Determinism mode: fixed seed + budget ⇒ reproducible trace. Accept: two runs → identical trace hash.
+ [~] T3.4 Recursion: act() may enqueue sub-scans (new scope roots) inheriting safety; depth + fan-out caps. Accept: nested-path fixture triggers sub-scan; caps enforced.
+ [x] T3.5 Novelty filter: dedupe actions/results by fingerprint. Accept: repeated discovery doesn't re-queue.
+ [x] T3.6 Determinism mode: fixed seed + budget ⇒ reproducible trace. Accept: two runs → identical trace hash.
 Phase 4 — Rust Scan Engine (data plane)
  T4.1 Async HTTP client honoring I1: scope, per-hop redirect validation, rate limit, concurrency cap, redaction, capped body, raw evidence. Accept: Rust unit tests mirror TS httpClient tests 1:1.
  T4.2 Raw socket layer (smuggling, host-header, cache-poisoning primitives) behind http.raw. Accept: tests vs fixtures.

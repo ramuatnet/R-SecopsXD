@@ -77,6 +77,7 @@ export function buildPlatform(config = loadConfig()): Platform {
   router.post('/api/targets', authed(h.createTarget(app)));
   router.get('/api/targets/:id', authed(h.targetSummary(app)));
   router.get('/api/targets/:id/diff', authed(h.targetDiff(app)));
+  router.get('/api/targets/:id/model', authed(h.targetModel(app)));
   router.post('/api/targets/:id/approve', authed(h.approveTarget(app)));
   router.post('/api/targets/:id/credentials', authed(h.setCredentials(app)));
   router.delete('/api/targets/:id/credentials', authed(h.deleteCredentials(app)));
