@@ -69,3 +69,16 @@ No category regressed to a higher claim (enforced by the no-inflation test).
 - Task registry: 26 → **32 tasks**; manual tasks reduced 9 → 6 (A04-T03, A06-T02, A09-T02, A09-T03, A03-T06, A01-T05/T06/A02-T06 newly automated)
 - Newly automated (was manual): TLS certificate/protocol analysis; API design-policy signals; JWT handling observation; logging hygiene (source); log-correlation observation; exposed manifests; source-map exposure; sensitive-data-in-URLs
 - Repository assessment for the enterprise expansion: docs/enterprise_expansion_assessment.md
+
+## Python data plane (2026-10-28, v2 Phase 0-py)
+
+- T0.1 redirected: user decision — Python 3.14 stdlib asyncio data plane now, Rust migration later (T12)
+- `engine/rsec_engine.py`: NDJSON JSON-RPC daemon (ping/http.get/http.post/recon/shutdown)
+- `engine/proto/v1.md`: language-agnostic protocol doc
+- `src/engine-bridge/bridge.ts`: TS control-plane bridge — spawn/supervise, NDJSON framing,
+  per-call timeout, crash rejection, respawn-on-next-call
+- Safety parity with the TS httpClient, regression-tested: scope origins enforced on
+  every redirect hop (out-of-scope hop → scope_blocked), rate limiting, method policy
+  (DELETE → safety_blocked), cumulative request budget (budget_exhausted), header +
+  body secret redaction, 256 KiB body cap
+- Suite: **155/155** (6 new bridge/engine tests)

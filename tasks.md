@@ -10,7 +10,7 @@ Drive it with a system prompt such as:
 
 Order matters. Build the control loop (Phase 3) before the Rust port (Phase 4/12). The loop is the differentiator; Rust is the performance layer.
 Status legend: [ ] todo · [~] in progress · [x] done · [!] blocked.
-Progress log: 2026-10-28 — T0.2 done (CI). T0.1 blocked (no cargo on host). T1.1–T1.4 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial (recursion plumbing via corpus, no sub-scan spawn yet).
+Progress log: 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
 Every capability is "done" only when its execution path, evidence, and tests exist. No relabeling missing work as done.
 1. Invariants (non-negotiable — regression-test these)
 I1 Single egress. All engine HTTP passes one scoped client that consults: payload guard → scope check (every redirect hop) → rate limit → concurrency cap → redaction.
@@ -155,7 +155,7 @@ cloud.* — S3/GCS/Azure/IMDS/marker probes
 shutdown
 8. Task board
 Phase 0 — Foundations
- [!] T0.1 Create engine/ Rust workspace (cargo new --lib rsec-engine; bins rsec-engine, rsec-probe). Crates: tokio, hyper + hyper-rustls, h2, reqwest (fallback), serde/serde_json, pest, regex, bytes, dashmap, tracing, anyhow/thiserror, clap, uuid, base64, sha2. Pin versions. Accept: cargo build clean; cargo clippy -D warnings clean.
+ [~] T0.1 Create engine/ workspace — REDIRECTED to Python (engine/rsec_engine.py); Rust port deferred to T12 (cargo new --lib rsec-engine; bins rsec-engine, rsec-probe). Crates: tokio, hyper + hyper-rustls, h2, reqwest (fallback), serde/serde_json, pest, regex, bytes, dashmap, tracing, anyhow/thiserror, clap, uuid, base64, sha2. Pin versions. Accept: cargo build clean; cargo clippy -D warnings clean.
  [x] T0.2 CI: GitHub Actions for TS (tsc --noEmit, npm test) + Rust (cargo test, clippy, fmt --check). Accept: green on PR.
  T0.3 engine/proto/v1.md (see §7) + serde structs. Accept: schema doc + structs compile.
  T0.4 TS EngineBridge: spawn/supervise rsec-engine, framed JSON-RPC, timeout, restart-on-crash. Accept: integration test round-trips ping + one http.get.
@@ -172,7 +172,7 @@ Phase 2 — Capability Probe Gate (kill the "webapp assumed" bias)
  [x] T2.3 "Absence is evidence" report section: what was probed-for and found absent, with the probe used. Accept: report snapshot test.
  [x] T2.4 Gate budget: max probes/iterations, all safety-gated. Accept: budget test.
 Phase 3 — The Autonomous Loop (control plane)
- [ ] T3.0 Finalize engine/proto/v1.md (frozen with Phase 4) (§7). Accept: schema frozen + versioned.
+ [x] T3.0 engine/proto/v1.md — protocol doc + implementation (v1 methods: ping/http.get/http.post/recon/shutdown) (§7). Accept: schema frozen + versioned.
  [x] T3.1 src/loop/planner.ts: candidate-action generation from the model (one generator per gap type). Accept: unit test per generator.
  [x] T3.2 src/loop/decide.ts: scoring P(worth)*info_gain/cost, safety + budget gated, deterministic tie-break. Accept: scoring unit tests.
  [x] T3.3 src/loop/loop.ts: sense→model→decide→act→verify→adapt with closure
