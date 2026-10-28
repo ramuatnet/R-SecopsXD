@@ -10,7 +10,6 @@
  * budget. "Absence is evidence": an absent probe with its method is itself a
  * recorded result (T2.3).
  */
-import type { Database } from '../db/database.ts';
 import { TargetModel } from './targetModel.ts';
 import type { CrawlPage } from '../engines/types.ts';
 import type { Target } from '../core/types.ts';
@@ -206,16 +205,13 @@ export interface GateResult {
  * evidence too).
  */
 export async function runProbeGate(
-  db: Database,
+  model: TargetModel,
   ctx: ProbeContext,
   budget: { maxProbes: number; maxRequests: number },
-  stats: RequestStats,
   capabilities?: string[],
 ): Promise<GateResult> {
-  const model = new TargetModel(db.handle, ctx.target.id);
   const results: ProbeResult[] = [];
   let requestsUsed = 0;
-
   const ordered = capabilities
     ? PROBES.filter((pr) => capabilities.includes(pr.capability))
     : PROBES;

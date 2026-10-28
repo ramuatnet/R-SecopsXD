@@ -48,11 +48,11 @@ test('probe gate: flips unknown capabilities to present/absent with budget', asy
     }];
     const origin = 'http://127.0.0.1:8899';
     const model = new TargetModel(db.handle, 't-gate');
-    const gate = await runProbeGate(db, {
+    const gate = await runProbeGate(model, {
       target: TARGET, origin, pages, client: {} as never, guard: {} as never,
       signal: new AbortController().signal, log: () => {},
-    }, { maxProbes: 20, maxRequests: 10 }, { sent: 0, blocked: 0 });
-    void model;
+    }, { maxProbes: 20, maxRequests: 10 });
+    void db;
 
     // observation-only probes on the synthetic corpus
     const byCap = new Map(gate.results.map((r) => [r.capability, r.state]));
@@ -65,10 +65,9 @@ test('probe gate: flips unknown capabilities to present/absent with budget', asy
     // origin unreachable in this test → honestly inconclusive (never a false 'absent')
     assert.equal(byCap.get('api.graphql'), 'inconclusive');
     assert.ok(byCap.get('api.openapi') === 'inconclusive' || byCap.get('api.openapi') === 'absent');
-    // model updated: unknown flipped
-    const m2 = new TargetModel(db.handle, TARGET.id);
-    assert.equal(m2.state('capability', 'auth.form'), 'present');
-    assert.equal(m2.state('capability', 'frontend.spa'), 'present');
+    // model updated: unknown flipped (gate writes via the SAME model instance)
+    assert.equal(model.state('capability', 'auth.form'), 'present');
+    assert.equal(model.state('capability', 'frontend.spa'), 'present');
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -79,10 +78,11 @@ test('probe gate: respects maxProbes budget', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ovap-gate2-'));
   const db = new Database(dir);
   try {
-    const gate = await runProbeGate(db, {
+    const model = new TargetModel(db.handle, 't-gate2');
+    const gate = await runProbeGate(model, {
       target: TARGET, origin: 'http://127.0.0.1:8899', pages: [], client: {} as never,
       guard: {} as never, signal: new AbortController().signal, log: () => {},
-    }, { maxProbes: 3, maxRequests: 10 }, { sent: 0, blocked: 0 });
+    }, { maxProbes: 3, maxRequests: 10 });
     assert.equal(gate.results.length, 3, 'stopped at budget');
   } finally {
     db.close();
@@ -215,3 +215,92 @@ function serverListen(server: Server, cb: () => void): void {
 function pageOf(url: string, body: string): CrawlPage {
   return { url, status: 200, truncated: false, headers: { 'content-type': 'text/html' }, body, forms: [], links: [] };
 }
+
+// ---------- T3.4 recursion: sub-scan with depth + fan-out caps ----------
+
+function nestedPathApp(): { server: Server; port: () => number; close: () => void } {
+  const server = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://x');
+    const p = url.pathname;
+    if (p === '/') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<script src="/app.js"></script><h1>SPA</h1>');
+      return;
+    }
+    if (p === '/app.js') {
+      res.writeHead(200, { 'content-type': 'application/javascript' });
+      res.end('fetch("/api/users");fetch("/api/orders");fetch("/v2/items");fetch("/v2/other");');
+      return;
+    }
+    // /api subtree: NO security headers (findable only via sub-scan)
+    if (p === '/api/users' || p === '/api/orders') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<html><body>API ${p}</body></html>`);
+      return;
+    }
+    // /v2 subtree: hardened (headers present)
+    if (p === '/v2/items' || p === '/v2/other') {
+      res.writeHead(200, {
+        'content-type': 'text/html',
+        'content-security-policy': "default-src 'self'",
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'DENY',
+        'referrer-policy': 'no-referrer',
+      });
+      res.end(`<html><body>V2 ${p}</body></html>`);
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  return {
+    server,
+    port: () => (server.address() as { port: number }).port,
+    close: () => server.close(),
+  };
+}
+
+test('T3.4 recursion: discovered subtree triggers sub-scan; fan-out cap enforced', async () => {
+  const app = nestedPathApp();
+  await new Promise<void>((r) => serverListen(app.server, r));
+  const origin = `http://127.0.0.1:${app.port()}`;
+  const dir = mkdtempSync(join(tmpdir(), 'ovap-sub-'));
+  const db = new Database(dir);
+  try {
+    const model = new TargetModel(db.handle, 't-sub');
+    const ctx = {
+      db, model,
+      target: { ...TARGET, origin }, mode: 'active' as const,
+      registry: new EngineRegistry(loadConfig()), config: loadConfig(),
+      client: clientFor(origin),
+      guard: new ScopeGuard(origin, { allowPublicTargets: true, maxRedirectHops: 2 }),
+      stats: { sent: 0, blocked: 0 }, signal: new AbortController().signal, workDir: dir,
+      crawl: {
+        pages: [pageOf(`${origin}/`, '<script src="/app.js"></script><h1>SPA</h1>')],
+        robots: { disallow: [], fetched: false },
+      },
+      credentials: undefined, credentialsSecondary: undefined,
+    };
+    const res = await runLoop(ctx as never, {
+      maxIterations: 25, maxRequests: 80, maxMs: 60_000, seed: 42, subscanFanout: 1,
+    });
+
+    // sub-scan ran for /api (lexicographically first candidate)
+    const traceActions = res.trace.map((t) => t.actionId);
+    assert.ok(traceActions.includes('subscan:/api'),
+      'nested /api subtree must trigger a sub-scan; trace: ' + JSON.stringify(traceActions));
+    // fan-out cap 1 → /v2 sub-scan never executed
+    assert.ok(!res.trace.some((t) => t.actionId === 'subscan:/v2'),
+      'fan-out cap must prevent the second subtree sub-scan');
+    // the sub-scan surfaced findings on pages the main crawl never visited
+    const header = res.findings.find(
+      (f) => f.provenance[0]?.rawId === 'missing-security-headers' && f.locator.startsWith('/api'),
+    );
+    assert.ok(header,
+      'sub-scan must observe the /api subtree headers; findings: '
+      + JSON.stringify(res.findings.map((f) => `${f.provenance[0]?.rawId}@${f.locator}`)));
+  } finally {
+    app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

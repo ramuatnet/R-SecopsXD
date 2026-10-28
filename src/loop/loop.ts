@@ -26,7 +26,7 @@ import { log } from '../logging.ts';
 
 export interface LoopAction {
   id: string;
-  type: 'engine' | 'verify' | 'probe';
+  type: 'engine' | 'verify' | 'probe' | 'subscan';
   /** engine id for type 'engine'; finding id for 'verify'. */
   target: string;
   reason: string;
@@ -41,6 +41,8 @@ export interface LoopBudget {
   maxRequests: number;
   maxMs: number;
   seed: number;
+  /** T3.4 fan-out cap: max sub-scans per loop run (default 3). */
+  subscanFanout?: number | undefined;
 }
 
 export interface LoopTraceEntry {
@@ -84,7 +86,12 @@ export interface PlannerInput {
   findings: Finding[];
   executedEngines: Set<string>;
   executedProbes: Set<string>;
+  /** Sub-scan subtree roots already executed (T3.4 recursion novelty). */
+  executedSubscans: Set<string>;
   crawledPaths: Set<string>;
+  discoveredEndpoints: string[];
+  /** Remaining sub-scan fan-out budget (T3.4 cap). */
+  subscanBudget: number;
 }
 
 const CAPABILITY_ENGINES: Record<string, string> = {
@@ -150,7 +157,82 @@ export function planCandidates(input: PlannerInput): LoopAction[] {
     });
   }
 
+  // 4. recursion (T3.4): ≥2 discovered endpoints under the same first path
+  // segment → sub-scan that subtree with a fresh mini-crawl. Depth is capped
+  // at 1 by construction (sub-scan results never feed the planner's endpoint
+  // list); fan-out is capped by subscanBudget.
+  if (input.subscanBudget > 0) {
+    const prefixes = new Map<string, number>();
+    for (const ep of input.discoveredEndpoints) {
+      const segs = ep.split('/').filter((s) => s !== '');
+      if (segs.length >= 1) {
+        const prefix = '/' + segs[0]!;
+        prefixes.set(prefix, (prefixes.get(prefix) ?? 0) + 1);
+      }
+    }
+    for (const [prefix, count] of [...prefixes.entries()].sort()) {
+      if (count >= 2 && !input.executedSubscans.has(prefix) && input.subscanBudget - candidates.filter((c) => c.type === 'subscan').length > 0) {
+        candidates.push({
+          id: `subscan:${prefix}`, type: 'subscan', target: prefix,
+          reason: `${count} endpoint(s) discovered under ${prefix} — subtree not crawled`,
+          worth: 0.8, infoGain: 7, cost: 4, score: 0,
+        });
+      }
+    }
+  }
+
   return candidates;
+}
+
+/**
+ * T3.4 sub-scan: bounded mini-crawl of a subtree root (root + discovered
+ * endpoints under it, ≤5 pages) followed by HTTP observation on that corpus.
+ * Inherits the loop's scoped client — same rate limits, same scope guard.
+ * Sub-scan pages do NOT merge into the main corpus, so sub-scan discoveries
+ * cannot spawn further sub-scans (depth cap 1 enforced by construction).
+ */
+export async function runSubscan(
+  ctx: LoopContext,
+  root: string,
+): Promise<{ pages: Array<{ url: string; status: number; headers: Record<string, string>; body: string }>; findings: Finding[] }> {
+  const origin = ctx.target.origin;
+  const urls = new Set<string>([new URL(root, origin + '/').toString()]);
+  for (const ep of ctx.crawl.discoveredEndpoints ?? []) {
+    if (ep === root || ep.startsWith(root + '/')) {
+      urls.add(new URL(ep, origin + '/').toString());
+    }
+    if (urls.size >= 5) break;
+  }
+
+  const pages: Array<{ url: string; status: number; headers: Record<string, string>; body: string }> = [];
+  for (const url of urls) {
+    if (ctx.signal.aborted || pages.length >= 5) break;
+    const res = await ctx.client.get(url);
+    if (res.ok) {
+      pages.push({ url: res.finalUrl, status: res.status, headers: res.headers, body: res.body });
+    }
+  }
+  if (pages.length === 0) return { pages, findings: [] };
+
+  const { HttpObservationEngine } = await import('../engines/builtin/httpObservation.ts');
+  const engine = new HttpObservationEngine();
+  const subCorpus = {
+    pages: pages.map((p) => ({
+      url: p.url, status: p.status, headers: p.headers, body: p.body, truncated: false,
+      forms: [], links: [],
+    })),
+    robots: { disallow: [], fetched: false },
+  };
+  const subCtx: ScanContext = {
+    scanId: `subscan${root.replace(/\//g, '-')}`, target: ctx.target, mode: ctx.mode,
+    client: ctx.client, guard: ctx.guard, stats: ctx.stats, signal: ctx.signal,
+    workDir: ctx.workDir, crawl: subCorpus, log: (m, f) => log.debug(m, f),
+  };
+  const result = await engine.run(subCtx);
+  const findings = (result.findings as import('../core/types.ts').RawFinding[]).map((raw) =>
+    normalizeFinding(raw, { target: ctx.target, engineId: 'builtin.http-observation', adapter: false, triages: new Map() }),
+  );
+  return { pages, findings };
 }
 
 // ---------- T3.2 decide: scoring + deterministic tie-break ----------
@@ -191,6 +273,8 @@ export async function runLoop(ctx: LoopContext, budget: LoopBudget): Promise<Loo
   const trace: LoopTraceEntry[] = [];
   const executedEngines = new Set<string>();
   const executedProbes = new Set<string>();
+  const executedSubscans = new Set<string>();
+  const fanoutCap = budget.subscanFanout ?? 3;
   const findings: Finding[] = [];
   let modelDeltas = 0;
   const startRequests = ctx.stats.sent;
@@ -216,8 +300,10 @@ export async function runLoop(ctx: LoopContext, budget: LoopBudget): Promise<Loo
     // --- sense/model: findings from previous iteration are already merged ---
     const plannerInput = {
       model: ctx.model, mode: ctx.mode, findings,
-      executedEngines, executedProbes,
+      executedEngines, executedProbes, executedSubscans,
       crawledPaths: new Set(ctx.crawl.pages.map((p) => new URL(p.url).pathname)),
+      discoveredEndpoints: ctx.crawl.discoveredEndpoints ?? [],
+      subscanBudget: fanoutCap - executedSubscans.size,
     };
     const candidates = planCandidates(plannerInput);
     if (candidates.length === 0) { terminatedBy = 'closure'; break; } // closure: no action worth taking
@@ -232,14 +318,20 @@ export async function runLoop(ctx: LoopContext, budget: LoopBudget): Promise<Loo
 
     if (action.type === 'probe') {
       const { runProbeGate } = await import('../model/probeGate.ts');
-      const gate = await runProbeGate(ctx.db, {
+      const gate = await runProbeGate(ctx.model, {
         target: ctx.target, origin: ctx.target.origin,
         pages: ctx.crawl.pages, client: ctx.client, guard: ctx.guard,
         signal: ctx.signal, log: (m, f) => log.debug(m, f),
-      }, { maxProbes: 10, maxRequests: Math.max(0, budget.maxRequests - (ctx.stats.sent - startRequests)) }, ctx.stats, [action.target]);
+      }, { maxProbes: 10, maxRequests: Math.max(0, budget.maxRequests - (ctx.stats.sent - startRequests)) }, [action.target]);
       executedProbes.add(action.id);
       modelDeltas = gate.results.length;
       outcome = gate.results.map((r) => `${r.capability}=${r.state}`).join(', ') || 'no-probe-ran';
+    } else if (action.type === 'subscan') {
+      const sub = await runSubscan(ctx, action.target);
+      executedSubscans.add(action.target);
+      findings.push(...sub.findings);
+      iterationFindings = sub.findings.length;
+      outcome = `sub-scan ${action.target}: ${sub.pages.length} page(s), ${sub.findings.length} finding(s)`;
     } else if (action.type === 'engine') {
       const engine = ctx.registry.create(action.target, ctx.config.maxCrawlPages);
       const availability = engine ? await ctx.registry.availability(action.target) : { available: false, reason: 'unknown engine' };
@@ -298,6 +390,7 @@ export async function runLoop(ctx: LoopContext, budget: LoopBudget): Promise<Loo
     });
     void modelDeltas;
     log.debug('loop iteration', { iteration, action: action.id, outcome });
+    if (process.env.LOOP_DEBUG) console.log('[itr]', iteration, action.id, '→', outcome);
   }
 
   if (iteration >= budget.maxIterations) terminatedBy = 'budget';
