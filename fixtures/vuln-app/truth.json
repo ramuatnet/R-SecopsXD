@@ -1,0 +1,17 @@
+{
+  "description": "Ground truth for fixtures/vuln-app. Every planted vulnerability is listed here; e2e tests assert these are detected (recall) and e2e clean-app tests assert no confirmed medium+ findings on the hardened twin (precision). Categories follow the official OWASP Top 10:2025 CWE mappings.",
+  "items": [
+    { "id": "V1", "name": "Missing security headers (CSP, XCTO, XFO, Referrer-Policy)", "category": "A02", "mode": "passive", "match": { "cwe": 693 } },
+    { "id": "V2", "name": "Session cookie without Secure/HttpOnly/SameSite", "category": "A02", "mode": "passive", "match": { "cwe": 614 } },
+    { "id": "V3", "name": "Verbose stack trace on error path", "category": "A10", "mode": "passive", "match": { "cwe": 209 } },
+    { "id": "V4", "name": "Unencoded reflection of query parameter (reflected XSS risk)", "category": "A05", "mode": "active", "match": { "locatorContains": "/search" } },
+    { "id": "V5", "name": "Server banner disclosing framework and version", "category": "A01", "mode": "passive", "match": { "cwe": 200 } },
+    { "id": "V6", "name": "Cleartext HTTP for credential-bearing login form", "category": "A04", "mode": "passive", "match": { "titleContains": "cleartext" } },
+    { "id": "V7", "name": "Unauthenticated access to /admin", "category": "A01", "mode": "active", "match": { "cwe": 862 } },
+    { "id": "V8", "name": "Sensitive information in HTML comments", "category": "A01", "mode": "passive", "match": { "cwe": 540 } },
+    { "id": "V9", "name": "Username enumeration via differential login responses", "category": "A07", "mode": "active", "match": { "cwe": 645 } },
+    { "id": "V10", "name": "No rate limiting on authentication endpoint", "category": "A07", "mode": "active", "match": { "titleContains": "rate limit" } },
+    { "id": "V11", "name": "IDOR: order objects accessible without authorization", "category": "A01", "mode": "active", "match": { "cwe": 639 } },
+    { "id": "V12", "name": "Directory listing enabled on /assets/", "category": "A01", "mode": "active", "match": { "cwe": 548 } }
+  ]
+}

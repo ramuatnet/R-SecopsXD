@@ -1,0 +1,77 @@
+/**
+ * Scan profiles: named presets that select engines per scan mode and target
+ * kind. Profiles are declarative and safe to expose via the API/UI.
+ */
+import type { ScanMode, TargetKind } from './types.ts';
+
+export interface Profile {
+  id: string;
+  name: string;
+  description: string;
+  targetKinds: TargetKind[];
+  maxCrawlPages: number;
+  /** Engines run in passive mode (and always in active mode). */
+  passiveEngines: string[];
+  /** Engines run ONLY in active mode (requires explicit scan.mode=active). */
+  activeEngines: string[];
+}
+
+export const PROFILES: Profile[] = [
+  {
+    id: 'quick-passive',
+    name: 'Quick passive assessment',
+    description: 'Crawls up to 10 pages with plain GETs and observes HTTP security posture. Sends no active probes. Suitable for continuous monitoring and first look.',
+    targetKinds: ['webapp'],
+    maxCrawlPages: 10,
+    passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
+    activeEngines: [],
+  },
+  {
+    id: 'standard-passive',
+    name: 'Standard passive assessment',
+    description: 'Crawls up to 30 pages and observes HTTP security posture incl. TLS and API-spec policy signals. No active probes.',
+    targetKinds: ['webapp'],
+    maxCrawlPages: 30,
+    passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
+    activeEngines: [],
+  },
+  {
+    id: 'standard-active',
+    name: 'Standard active assessment',
+    description: 'Passive crawl (incl. TLS + API-spec policy) + bounded active probes: sensitive-path checks, input-reflection markers, authentication probes (enumeration + rate limiting), open-redirect and authenticated checks when a credential profile is configured. Must be explicitly enabled on an approved target.',
+    targetKinds: ['webapp'],
+    maxCrawlPages: 30,
+    passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
+    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe'],
+  },
+  {
+    id: 'external-dast',
+    name: 'External DAST (ZAP + Nuclei)',
+    description: 'Standard active assessment plus OWASP ZAP quick scan and Nuclei template scanning (DoS/fuzz/bruteforce templates excluded). Requires installed tools; unavailable engines are recorded and skipped.',
+    targetKinds: ['webapp'],
+    maxCrawlPages: 30,
+    passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
+    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe', 'adapter.zap', 'adapter.nuclei'],
+  },
+  {
+    id: 'source-review',
+    name: 'Source + dependency review',
+    description: 'Reviews a source tree: built-in pattern scan, dependency inventory, plus Semgrep/Trivy/Grype when installed.',
+    targetKinds: ['source'],
+    maxCrawlPages: 0,
+    passiveEngines: ['builtin.source-scan', 'builtin.dep-manifest', 'adapter.semgrep', 'adapter.trivy', 'adapter.grype'],
+    activeEngines: [],
+  },
+];
+
+export function getProfile(id: string): Profile | undefined {
+  return PROFILES.find((p) => p.id === id);
+}
+
+/** Engines that will run for a profile+mode combination (active engines are reported skipped in passive mode). */
+export function enginePlan(profile: Profile, mode: ScanMode): Array<{ id: string; willRun: boolean }> {
+  const plan: Array<{ id: string; willRun: boolean }> = [];
+  for (const id of profile.passiveEngines) plan.push({ id, willRun: true });
+  for (const id of profile.activeEngines) plan.push({ id, willRun: mode === 'active' });
+  return plan;
+}

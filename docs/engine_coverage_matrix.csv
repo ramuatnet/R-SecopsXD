@@ -1,0 +1,58 @@
+engine,kind,category,task_id,task_title,mode,target_kinds,strength,status_2026_10_27
+builtin.crawler-lite,builtin,-,-,Bounded same-origin crawl (feeds observers),any,webapp,strong,implemented
+builtin.http-observation,builtin,A01,A01-T01,Sensitive information exposure in served content,passive,webapp,heuristic,implemented
+builtin.http-observation,builtin,A02,A02-T01,Security header configuration,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A02,A02-T02,Cookie attribute configuration,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A02,A02-T03,Software version disclosure,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A02,A02-T04,Directory listing exposure,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A04,A04-T01,Cleartext transport of credential-bearing forms,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A08,A08-T01,External scripts without Subresource Integrity,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A10,A10-T01,Verbose error disclosure in observed responses,passive,webapp,strong,implemented
+builtin.path-probe,builtin,A01,A01-T02,Unauthenticated exposure of administrative/sensitive paths,active,webapp,strong,implemented
+builtin.path-probe,builtin,A01,A01-T03,Object-level access-control smoke probe (IDOR family),active,webapp,heuristic,implemented
+builtin.path-probe,builtin,A02,A02-T05,Exposed configuration/backup files and admin surfaces,active,webapp,strong,implemented
+builtin.reflection-probe,builtin,A05,A05-T01,Unencoded reflection of user input,active,webapp,strong,implemented
+builtin.auth-probe,builtin,A07,A07-T01,Username enumeration via differential responses,active,webapp,strong,implemented
+builtin.auth-probe,builtin,A07,A07-T02,Missing rate limiting on authentication endpoint,active,webapp,strong,implemented
+builtin.source-scan,builtin,A04,A04-T02,Weak crypto primitives and disabled certificate validation,passive,source,heuristic,implemented
+builtin.source-scan,builtin,A05,A05-T02,SQL concatenation and eval patterns,passive,source,heuristic,implemented
+builtin.source-scan,builtin,A07,A07-T03,Hardcoded credentials in source,passive,source,heuristic,implemented
+builtin.dep-manifest,builtin,A03,A03-T01,Dependency inventory from manifests/lockfiles,passive,source,strong,implemented
+builtin.tls-analysis,builtin,A04,A04-T03,TLS certificate and protocol analysis (handshake-level),passive,webapp,strong,implemented (was manual)
+builtin.openapi-policy,builtin,A06/A02,A06-T02,API design-policy signals from exposed OpenAPI/Swagger specs,passive,webapp,heuristic,implemented (was manual)
+builtin.http-observation,builtin,A02,A02-T06,CORS policy configuration (Origin reflection + credentials),active,webapp,strong,implemented
+builtin.http-observation,builtin,A04,A04-T04,JWT handling observation (alg=none, missing expiry),passive,webapp,heuristic,implemented (was manual)
+builtin.http-observation,builtin,A01,A01-T05,Sensitive data in URL query strings,passive,webapp,heuristic,implemented (was manual)
+builtin.http-observation,builtin,A09,A09-T03,Log-correlation indicators on error responses,passive,webapp,heuristic,implemented (was manual)
+builtin.source-scan,builtin,A09,A09-T02,Logging hygiene in source (secrets in logs, log injection),passive,source,heuristic,implemented (was manual)
+builtin.path-probe,builtin,A01,A01-T06,Source map exposure for crawled scripts,active,webapp,strong,implemented (was manual)
+builtin.path-probe,builtin,A03,A03-T06,Exposed dependency manifests/lockfiles on the web target,active,webapp,strong,implemented (was manual)
+builtin.redirect-probe,builtin,A01,A01-T08,Open redirect probing (reserved marker host),active,webapp,strong,implemented (was manual)
+builtin.authenticated-probe,builtin,A01,A01-T07,Authenticated surface discovery with test account,active,webapp,strong,implemented (B1)
+builtin.authenticated-probe,builtin,A07,A07-T05,Session invalidation after logout,active,webapp,strong,implemented (was manual; B1)
+builtin.authenticated-probe,builtin,A04,A04-T05,JWT forgery verification (alg=none / stripped signature),active,webapp,strong,implemented (was manual; B1)
+builtin.path-probe,builtin,A07,A07-T06,Secrets embedded in exposed source maps,active,webapp,heuristic,implemented (was manual)
+builtin.http-observation,builtin,A02,A02-T07,CSP quality analysis (unsafe-inline/unsafe-eval/object-src),passive,webapp,strong,implemented
+builtin.http-observation,builtin,A04,A04-T06,HSTS absence on HTTPS origins,passive,webapp,strong,implemented
+builtin.http-observation,builtin,A07,A07-T07,Secrets in served JavaScript bundles,passive,webapp,heuristic,implemented (spec section 4)
+builtin.graphql-probe,builtin,A01/A05,A01-T09/A05-T04,GraphQL introspection + playground exposure,active,webapp,strong,implemented
+builtin.endpoint-discovery,builtin,A01,A01-T12,Undocumented API endpoint discovery from JS bundles,passive,webapp,strong,implemented (feeds active probes)
+builtin.authenticated-probe,builtin,A01,A01-T11,Cross-role authorization matrix (two test identities),active,webapp,strong,implemented (B1 complete)
+builtin.http-observation,builtin,A01,A01-T10,CSRF exposure (tokenless POST forms + SameSite-less session),passive,webapp,heuristic,implemented
+builtin.reflection-probe,builtin,A05,A05-T05,Error-based SQLi differential (single-quote vs baseline, 1 request/param),active,webapp,heuristic,implemented
+builtin.http-observation,builtin,A04,A04-T07,Mixed content (http subresources on https pages),passive,webapp,strong,implemented
+builtin.http-observation,builtin,A03,A03-T07,Frontend library version fingerprinting (curated advisories),passive,webapp,strong,implemented
+adapter.semgrep,adapter,A05,A05-T02 (supplements),Injection sinks via SAST patterns,passive,source,heuristic,implemented (adapter; e2e pending tool install)
+adapter.trivy,adapter,A03,A03-T02,Known CVE matching (Trivy),passive,source,strong,implemented (adapter; e2e pending tool install)
+adapter.grype,adapter,A03,A03-T03,Known CVE matching (Grype),passive,source,strong,implemented (validated e2e)
+adapter.nuclei,adapter,A01/A02/A05/A07/A10,multiple,Template-based checks (deny-listed tags),any,webapp,heuristic,implemented (adapter; e2e pending tool install)
+adapter.zap,adapter,A01/A02/A05/A07/A08/A10,multiple,DAST quick scan,active,webapp,heuristic,implemented (adapter; e2e pending tool install)
+manual,-,A01,A01-T04,Authenticated horizontal/vertical authorization testing,active,webapp,strong,manual (requires credentials)
+manual,-,A03,A03-T04,Malicious-package judgement and build-pipeline review,passive,source,strong,manual (by design)
+manual,-,A03,A03-T05,SBOM review of the deployed application,passive,webapp,strong,manual (requires build access)
+manual,-,A04,A04-T03,TLS protocol/cipher/certificate analysis,passive,webapp,strong,manual (requires dedicated TLS tooling)
+manual,-,A05,A05-T03,Dynamic injection testing beyond bounded reflection,active,webapp,strong,manual (destructive-risk; by design)
+manual,-,A06,A06-T01,Design and threat-model review,passive,any,strong,manual (by nature)
+manual,-,A07,A07-T04,Session lifecycle/lockout/MFA/password-policy validation,active,webapp,strong,manual (requires credentials)
+manual,-,A08,A08-T02,Pipeline integrity: signing/provenance/update verification,passive,any,strong,manual (process-level)
+manual,-,A09,A09-T01,Server-side logging and alerting effectiveness review,passive,any,strong,manual (requires log/SIEM access)

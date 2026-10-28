@@ -1,0 +1,11 @@
+{
+  "name": "source-project-fixture",
+  "version": "1.0.0",
+  "description": "Intentionally vulnerable source fixture for the source-review scan mode. Planted issues are documented in fixtures/source-project/PLANTED.md. Dependencies are deliberately old for SCA adapter testing; this code must never be executed.",
+  "private": true,
+  "dependencies": {
+    "lodash": "^4.17.15",
+    "minimist": "^1.2.0",
+    "node-fetch": "^2.6.0"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+data/
+*.log
+.DS_Store
+Thumbs.db
+
+# Confidential scan reports (contain findings about assessed targets)
+docs/samples/
+# Local runtime data
+data/
+data-demo/
+*.log
+

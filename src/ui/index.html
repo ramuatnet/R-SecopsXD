@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OWASP Top 10:2025 Assessment Platform</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-title">OWASP Assessment</div>
+      <div class="brand-sub">Top 10:2025 · authorized targets only</div>
+    </div>
+    <nav>
+      <button data-view="targets" class="nav-btn active">Targets</button>
+      <button data-view="scans" class="nav-btn">Scans</button>
+      <button data-view="engines" class="nav-btn">Engines</button>
+      <button data-view="owasp" class="nav-btn">OWASP Top 10</button>
+      <button data-view="audit" class="nav-btn">Audit log</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="health" class="health">connecting…</div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="token-gate" class="gate hidden">
+      <h1>Sign in</h1>
+      <p>Paste the operator token printed at server startup
+        (also stored in <code>data/auth-token.txt</code>).</p>
+      <input id="token-input" type="password" placeholder="ova_…" autocomplete="off">
+      <button id="token-save" class="primary">Unlock</button>
+      <p id="token-error" class="error hidden">Invalid token.</p>
+    </div>
+
+    <div id="content" class="hidden">
+      <!-- targets -->
+      <section id="view-targets" class="view">
+        <div class="view-head"><h1>Targets</h1>
+          <span class="muted">Register → approve → scan. Approval is a separate, audited action.</span></div>
+        <form id="target-form" class="panel form-row">
+          <input name="name" placeholder="Target name" required maxlength="100">
+          <select name="kind">
+            <option value="webapp">Web application (origin)</option>
+            <option value="source">Source tree (path)</option>
+          </select>
+          <input name="origin" placeholder="Origin, e.g. http://127.0.0.1:3000">
+          <input name="sourcePath" placeholder="Absolute source path (source targets)">
+          <button class="primary" type="submit">Register</button>
+        </form>
+        <div id="target-list" class="cards"></div>
+      </section>
+
+      <!-- scans -->
+      <section id="view-scans" class="view hidden">
+        <div class="view-head"><h1>Scans</h1>
+          <span class="muted">Passive mode sends only plain GETs. Active mode is explicit and audited.</span></div>
+        <form id="scan-form" class="panel form-row">
+          <select name="targetId" required></select>
+          <select name="profile" required></select>
+          <select name="mode">
+            <option value="passive">passive (default)</option>
+            <option value="active">active (explicit)</option>
+          </select>
+          <button class="primary" type="submit">Start scan</button>
+        </form>
+        <div id="scan-list" class="table-wrap"></div>
+        <div id="scan-detail"></div>
+      </section>
+
+      <!-- engines -->
+      <section id="view-engines" class="view hidden">
+        <div class="view-head"><h1>Engines</h1>
+          <span class="muted">Built-in checks plus wrapped external scanners. Missing tools show install hints.</span></div>
+        <div id="engine-list" class="cards"></div>
+      </section>
+
+      <!-- owasp -->
+      <section id="view-owasp" class="view hidden">
+        <div class="view-head"><h1>OWASP Top 10:2025</h1>
+          <span class="muted">Official categories with the platform's honest automation limits.</span></div>
+        <div id="owasp-list" class="cards"></div>
+      </section>
+
+      <!-- audit -->
+      <section id="view-audit" class="view hidden">
+        <div class="view-head"><h1>Audit log</h1>
+          <span class="muted">Append-only record of lifecycle, scan and auth events.</span></div>
+        <div id="audit-list" class="table-wrap"></div>
+      </section>
+    </div>
+  </main>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script type="module" src="/ui/app.js"></script>
+</body>
+</html>

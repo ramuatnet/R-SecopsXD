@@ -1,0 +1,37 @@
+rules:
+  - id: owap-hardcoded-secret
+    languages: [generic]
+    severity: ERROR
+    message: "Possible hardcoded credential assigned in source. Move secrets to a secret manager and rotate the exposed value."
+    patterns:
+      - pattern-regex: '(?i)(?:^|[^a-z0-9])(api[_-]?key|secret|password|passwd|token|access[_-]?key)\s*[:=]\s*["''][^"''\s]{8,}["'']'
+
+  - id: owap-md5-hash
+    languages: [generic]
+    severity: WARNING
+    message: "MD5/SHA-1 hash usage detected. These algorithms are broken for security purposes; use SHA-256+ or a password KDF (Argon2id/bcrypt/scrypt)."
+    pattern-regex: '(?i)(createHash|hashlib\.md5|MessageDigest\.getInstance)\s*\(\s*["'']?(md5|sha1)["'']?\)?'
+
+  - id: owap-sql-concat
+    languages: [generic]
+    severity: ERROR
+    message: "SQL statement appears to be built with string concatenation — the classic SQL injection pattern. Use parameterized queries."
+    pattern-regex: '(?i)["''](?:SELECT\s|INSERT\s+INTO\s|UPDATE\s|DELETE\s+FROM\s)[^"'']*["'']\s*\+\s*\w'
+
+  - id: owap-tls-verify-off
+    languages: [generic]
+    severity: ERROR
+    message: "TLS certificate verification disabled — enables machine-in-the-middle attacks on this connection."
+    pattern-regex: 'rejectUnauthorized\s*:\s*false|InsecureSkipVerify\s*:\s*true|check_hostname\s*=\s*False'
+
+  - id: owap-eval-usage
+    languages: [generic]
+    severity: WARNING
+    message: "eval() executes a string as code. If any part derives from untrusted input this is code injection."
+    pattern-regex: '(^|[^.\w])eval\s*\('
+
+  - id: owap-deserialization
+    languages: [generic]
+    severity: WARNING
+    message: "Deserialization of potentially untrusted data (pickle/yaml.load/marshal). Use safe formats (JSON) or safe loaders."
+    pattern-regex: '(?i)(pickle\.loads?\s*\(|yaml\.load\s*\((?!.*Loader\s*=\s*yaml\.SafeLoader)|marshal\.loads?\s*\(|ObjectInputStream)'
