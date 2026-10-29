@@ -15,7 +15,7 @@ function testConfig(dir: string): Config {
     host: '127.0.0.1', port: 0, dataDir: dir, token: undefined,
     allowPublicTargets: false, rateLimitPerSecond: 100, rateBurst: 50,
     maxConcurrency: 8, maxConcurrentScans: 2, requestTimeoutMs: 5000,
-    engineTimeoutMs: 30_000, scanTimeoutMs: 60_000, maxCrawlPages: 10, maxCrawlPagesExplicit: false,
+    engineTimeoutMs: 30_000, scanTimeoutMs: 60_000, maxCrawlPages: 10, maxCrawlPagesExplicit: false, loopEnabled: false, loopMaxIterations: 40, loopMaxRequests: 800, loopMaxMs: 600000, loopSeed: 0, loopSubscanFanout: 3,
     logLevel: 'error',
   };
 }

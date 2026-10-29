@@ -19,6 +19,13 @@ export interface Config {
   maxCrawlPages: number;
   /** Set when OWASP_MAX_CRAWL_PAGES was provided explicitly — overrides profile caps. */
   maxCrawlPagesExplicit: boolean;
+  /** T-W4: autonomous loop settings. */
+  loopEnabled: boolean;
+  loopMaxIterations: number;
+  loopMaxRequests: number;
+  loopMaxMs: number;
+  loopSeed: number;
+  loopSubscanFanout: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 
@@ -55,5 +62,11 @@ export function loadConfig(): Config {
     logLevel: (['debug', 'info', 'warn', 'error'].includes(level ?? '')
       ? level
       : 'info') as Config['logLevel'],
+    loopEnabled: bool('OWASP_LOOP_ENABLED', false),
+    loopMaxIterations: num('OWASP_LOOP_MAX_ITERATIONS', 40),
+    loopMaxRequests: num('OWASP_LOOP_MAX_REQUESTS', 800),
+    loopMaxMs: num('OWASP_LOOP_MAX_MS', 600_000),
+    loopSeed: num('OWASP_LOOP_SEED', 0),
+    loopSubscanFanout: num('OWASP_LOOP_SUBSCAN_FANOUT', 3),
   };
 }

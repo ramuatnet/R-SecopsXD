@@ -325,25 +325,30 @@ data: ${JSON.stringify(data)}
 
 `));
         };
-        // Send the current engine statuses
-        send('engines', scan.engines);
-        send('coverage', scan.coverage);
-        send('stats', scan.stats);
-        // Poll for changes every 2s until scan completes
-        let lastEngineCount = scan.engines.length;
-        interval = setInterval(() => {
-          const fresh = app.db.getScan(scan.id);
-          if (!fresh) { clearInterval(interval); controller.close(); return; }
-          if (fresh.engines.length !== lastEngineCount) {
-            lastEngineCount = fresh.engines.length;
-            send('engines', fresh.engines);
-          }
-          if (['completed', 'failed', 'cancelled'].includes(fresh.status)) {
-            send('done', { status: fresh.status, findings: fresh.stats.totalFindings });
-            clearInterval(interval);
-            controller.close();
-          }
-        }, 2000);
+        // T-W4: read the persistent trace table
+        const trace = app.db.readTrace(scan.id);
+        for (const entry of trace) {
+          send('trace', entry);
+        }
+        send('status', { status: scan.status, findings: scan.stats.totalFindings });
+        // If scan is still running, poll for new trace entries
+        if (!['completed', 'failed', 'cancelled'].includes(scan.status)) {
+          let lastIteration = trace.length;
+          interval = setInterval(() => {
+            const fresh = app.db.getScan(scan.id);
+            if (!fresh) { clearInterval(interval); controller.close(); return; }
+            const freshTrace = app.db.readTrace(scan.id);
+            for (const entry of freshTrace.slice(lastIteration)) {
+              send('trace', entry);
+              lastIteration++;
+            }
+            if (['completed', 'failed', 'cancelled'].includes(fresh.status)) {
+              send('done', { status: fresh.status, findings: fresh.stats.totalFindings });
+              clearInterval(interval);
+              controller.close();
+            }
+          }, 2000);
+        }
       },
       cancel() { if (interval) clearInterval(interval); },
     });

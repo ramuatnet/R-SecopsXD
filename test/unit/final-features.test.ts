@@ -145,8 +145,8 @@ test('SSE trace endpoint streams scan events', async () => {
     host: '127.0.0.1', port: 0, dataDir: dir, token: 'test-token',
     allowPublicTargets: false, rateLimitPerSecond: 100, rateBurst: 50,
     maxConcurrency: 8, maxConcurrentScans: 2, requestTimeoutMs: 5000,
-    engineTimeoutMs: 30_000, scanTimeoutMs: 60_000, maxCrawlPages: 10,
-    maxCrawlPagesExplicit: false, logLevel: 'error',
+    engineTimeoutMs: 30_000, scanTimeoutMs: 60_000, maxCrawlPages: 10, maxCrawlPagesExplicit: false, loopEnabled: false, loopMaxIterations: 40, loopMaxRequests: 800, loopMaxMs: 600000, loopSeed: 0, loopSubscanFanout: 3,
+    logLevel: 'error',
   };
   const platform = buildPlatform(config);
   try {

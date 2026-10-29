@@ -148,6 +148,20 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (target_id, seq)
   );
   `,
+  // 006: loop trace (T-W4) — per-iteration audit trail
+  `
+  CREATE TABLE IF NOT EXISTS scan_trace (
+    target_id TEXT NOT NULL,
+    scan_id TEXT NOT NULL,
+    iteration INTEGER NOT NULL,
+    action_id TEXT,
+    outcome TEXT NOT NULL,
+    finding_count INTEGER NOT NULL DEFAULT 0,
+    requests_after INTEGER NOT NULL DEFAULT 0,
+    ts TEXT NOT NULL,
+    PRIMARY KEY (scan_id, iteration)
+  );
+  `,
 ];
 
 export class Database {
@@ -334,6 +348,23 @@ export class Database {
       : this.db.prepare('DELETE FROM credentials WHERE target_id = ?').run(targetId);
     if (info.changes > 0) this.audit({ actor: 'operator', action: 'target.credentials.deleted', details: { targetId, role: role ?? 'all' } });
     return info.changes > 0;
+  }
+
+  writeTraceEntry(scanId: string, targetId: string, entry: { iteration: number; actionId?: string | undefined; outcome: string; findingCount: number; requestsAfter: number }): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO scan_trace (target_id, scan_id, iteration, action_id, outcome, finding_count, requests_after, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(targetId, scanId, entry.iteration, entry.actionId ?? null, entry.outcome, entry.findingCount, entry.requestsAfter, new Date().toISOString());
+  }
+
+  readTrace(scanId: string): Array<{ iteration: number; actionId?: string | undefined; outcome: string; findingCount: number; requestsAfter: number; ts: string }> {
+    return (this.db.prepare('SELECT * FROM scan_trace WHERE scan_id = ? ORDER BY iteration').all(scanId) as Array<Record<string, unknown>>).map((r) => ({
+      iteration: r.iteration as number,
+      actionId: (r.action_id as string | null) ?? undefined,
+      outcome: r.outcome as string,
+      findingCount: r.finding_count as number,
+      requestsAfter: r.requests_after as number,
+      ts: r.ts as string,
+    }));
   }
 
   getConfigValue(key: string): string | undefined {

@@ -23,6 +23,7 @@ import { ScopedHttpClient, type RequestStats } from './httpClient.ts';
 import { normalizeFinding } from './normalize.ts';
 import { dedupeFindings } from '../core/ids.ts';
 import { computeCoverage } from './coverage.ts';
+import { runLoopScan } from './loopRunner.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
 import { log } from '../logging.ts';
@@ -133,6 +134,48 @@ export class Orchestrator {
     signal: AbortSignal,
   ): Promise<void> {
     this.db.updateScan(scanId, { status: 'running' });
+
+    // T-W1: branch to the autonomous loop when enabled and applicable;
+    // fall back to the linear path on error (I11).
+    if (this.config.loopEnabled && target.kind === 'webapp') {
+      try {
+        const result = await runLoopScan(scanId, target, mode, {
+          db: this.db, config: this.config, registry: this.registry,
+        }, signal);
+        this.db.updateScan(scanId, {
+          status: 'completed',
+          finishedAt: new Date().toISOString(),
+          engines: result.engineRecords,
+          coverage: result.coverage,
+          stats: {
+            findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, untested: 0 },
+            totalFindings: result.findings.length,
+            requestsSent: result.stats.sent,
+            requestsBlocked: result.stats.blocked,
+          },
+        });
+        this.db.audit({ actor: 'system', action: 'scan.completed', details: { scanId, mode: 'loop', findings: result.findings.length, iterations: result.iterations, terminatedBy: result.terminatedBy } });
+        return;
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        log.warn('loop fell back to linear', { scanId, reason });
+        this.db.audit({ actor: 'system', action: 'loop.fell_back', details: { scanId, reason } });
+        // I11: fall through to linear path below
+      }
+    }
+
+    // --- linear plan (v0.1 path, also the fallback) ---
+    await this.executeLinearScan(scanId, target, profileId, mode, signal);
+  }
+
+  private async executeLinearScan(
+    scanId: string,
+    target: Target,
+    profileId: string,
+    mode: ScanMode,
+    signal: AbortSignal,
+  ): Promise<void> {
 
     const profile = getProfile(profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
