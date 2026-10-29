@@ -20,7 +20,8 @@ from pathlib import Path
 MAX_BODY = 256 * 1024
 ROUTE_PATTERNS = [
     re.compile(r"(?:fetch|axios|\burl)\s*[(=:]\s*[`\"']([^`\"'()\s]+)[`\"']"),
-    re.compile(r"[`\"'](\/api\/[A-Za-z0-9_\-/.{}$]+)[`\"']"),
+    re.compile(r"[`\"'](\/(?:api|rest|v[0-9])\/[A-Za-z0-9_\-/.{}$]+)[`\"']"),
+    re.compile(r"[`\"'](\/[a-z][a-z0-9_\-]+\/[a-z][A-Za-z0-9_\-/.{}$]+)[`\"']"),
     re.compile(r"[`\"'](\/v[0-9][A-Za-z0-9_\-/.{}$]*)[\"']"),
 ]
 

@@ -208,6 +208,50 @@ export class PathProbeEngine implements Engine {
       });
     }
 
+    // Discovered-endpoint probing: GET each discovered API endpoint and flag
+    // 500 responses with stack-trace patterns as verbose error disclosure.
+    const discovered = (ctx.crawl?.discoveredEndpoints ?? []).slice(0, 8);
+    for (const ep of discovered) {
+      if (ctx.signal.aborted || probes >= 30) break;
+      probes++;
+      const url = new URL(ep, origin + '/').toString();
+      const res = await ctx.client.get(url);
+      if (!res.ok) continue;
+      const stackPatterns: Array<[RegExp, string]> = [
+        [/\bat\s+[\w$.<>:/\\]+\s*\([^)]*:\d+(:\d+)?\)/, 'runtime stack frames'],
+        [/Traceback \(most recent call last\)/, 'python traceback'],
+        [/(System\.|java\.lang\.)[\w.]*Exception/, 'jvm exception'],
+        [/\b(node_modules|\/srv\/|\/app\/|\/home\/\w+\/|\/juice-shop\/)[\w\-/.]+\.(js|py|rb|php|ts)/, 'internal file paths'],
+      ];
+      const matched = stackPatterns.filter(([re]) => re.test(res.body)).map(([, w]) => w);
+      if (res.status >= 500 && matched.length > 0) {
+        findings.push({
+          rawId: 'verbose-error-disclosure',
+          title: `Verbose error disclosure (stack trace) on ${ep}`,
+          category: 'A10',
+          cwe: 209,
+          severity: 'medium',
+          confidence: 'high',
+          status: 'confirmed',
+          asset: ctx.target.origin,
+          locator: ep,
+          evidence: [{
+            kind: 'http',
+            request: { method: 'GET', url, headers: {} },
+            response: { status: res.status, headers: {}, bodyExcerpt: res.body.slice(0, 400) },
+            observation: `GET ${ep} returned ${res.status} with ${matched.join(', ')}`,
+          }],
+          explanation:
+            'A discovered API endpoint returns internal error details including stack traces and ' +
+            'file paths. This exposes the server framework, internal code structure and deployment ' +
+            'layout to any client (CWE-209, mishandling of exceptional conditions).',
+          remediation:
+            'Return generic error responses to clients; log full details server-side with correlation IDs.',
+          references: ['https://owasp.org/Top10/2025/en/A10_2025-Mishandling_of_Exceptional_Conditions/'],
+        });
+      }
+    }
+
     // Source-map exposure probe (active): for up to 5 same-origin .js files seen in
     // the crawl, request the sibling .js.map. A served map discloses original source
     // code (CWE-540). Validated: response must be JSON containing a "sources" member.

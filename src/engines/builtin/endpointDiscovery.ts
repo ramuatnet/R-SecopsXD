@@ -28,10 +28,11 @@ const INFO: EngineInfo = {
 const MAX_BUNDLES = 8;
 const MAX_ENDPOINTS = 60;
 
-/** Route strings from fetch/axios/url usage plus /api|/v1-style literal paths. */
+/** Route strings from fetch/axios/url usage plus multi-segment API-path literals. */
 const ROUTE_PATTERNS: RegExp[] = [
   /(?:fetch|axios|\burl)\s*[(=:]\s*[`"']([^`"'()\s]+)[`"']/g,
-  /[`"'](\/api\/[A-Za-z0-9_\-/.{}$]+)[`"']/g,
+  /[`"'](\/(?:api|rest|v[0-9])\/[A-Za-z0-9_\-/.{}$]+)[`"']/g,
+  /[`"'](\/[a-z][a-z0-9_\-]+\/[a-z][A-Za-z0-9_\-/.{}$]+)[`"']/g,
   /[`"'](\/v[0-9][A-Za-z0-9_\-/.{}$]*)["']/g,
 ];
 
