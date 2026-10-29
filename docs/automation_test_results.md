@@ -89,3 +89,12 @@ No category regressed to a higher claim (enforced by the no-inflation test).
 - T9.2 alertOnNewFindings: fingerprint diff vs previous scan → webhook POST with scores; alert-dedup prevents re-alerting the same finding
 - T10.3 toSarif: SARIF 2.1.0 with rules, levels, stable partialFingerprints
 - Suite: **164/164** (5 new continuous tests)
+
+## JSON login + metrics + SBOM + SSE (2026-10-29, latest)
+
+- JSON-API login: `loginType: 'json'` + `tokenField` on credential profiles;
+  authenticated probe handles bearer-token sessions (tested against a JSON login fixture)
+- computePrecisionRecall: formalized P/R/F1 measurement for CI ground-truth gating
+- toCycloneDX: SBOM 1.5 export from dependency-inventory findings
+- SSE trace endpoint: GET /api/scans/:id/trace streams scan events
+- Suite: **180/180**

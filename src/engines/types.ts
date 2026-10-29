@@ -33,9 +33,14 @@ export interface CredentialProfile {
   username: string;
   password: string;
   role?: string | undefined;
+  /** 'form' (default): POST form-encoded to a discovered/credential-provided form action.
+   *  'json': POST JSON {username,password} to loginUrl; session = cookie or bearer token from response. */
+  loginType?: string | undefined;
   loginUrl?: string | undefined;
   usernameField?: string | undefined;
   passwordField?: string | undefined;
+  /** For json login: the JSON path to the token in the response (e.g. 'token', 'access_token'). */
+  tokenField?: string | undefined;
 }
 
 export interface ScanContext {

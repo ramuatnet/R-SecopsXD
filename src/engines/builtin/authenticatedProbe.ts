@@ -20,6 +20,14 @@ import type { EngineInfo, RawFinding } from '../../core/types.ts';
 import { redactText } from '../../core/redact.ts';
 
 
+/** Authenticated session — supports cookie-based and bearer-token-based auth. */
+interface Session {
+  cookies: Array<{ name: string; value: string }>;
+  /** Pre-built headers ready to pass to client.get()/postForm(). */
+  authHeaders: Record<string, string>;
+  bearerToken?: string | undefined;
+}
+
 const INFO: EngineInfo = {
   id: 'builtin.authenticated-probe',
   name: 'Authenticated Probe',
@@ -118,8 +126,9 @@ export class AuthenticatedProbeEngine implements Engine {
     return undefined;
   }
 
-  private async login(ctx: ScanContext, form: { url: string; fields: string[] }, profile?: CredentialProfile): Promise<{ cookieHeader: string; cookies: Array<{ name: string; value: string }> } | undefined> {
+  private async login(ctx: ScanContext, form: { url: string; fields: string[] }, profile?: CredentialProfile): Promise<Session | undefined> {
     const cred = profile ?? ctx.credentials!;
+    if (cred.loginType === 'json') return this.jsonLogin(ctx, cred);
     const userField = cred.usernameField
       ?? (form.fields.find((f) => /user|email|login/i.test(f)) ?? form.fields[0] ?? 'username');
     const passField = cred.passwordField
@@ -129,7 +138,35 @@ export class AuthenticatedProbeEngine implements Engine {
     const setCookie = res.headers['set-cookie'] ?? '';
     const cookies = parseCookies(setCookie).filter((c) => c.value !== '' && c.value !== 'deleted');
     if (cookies.length === 0) return undefined;
-    return { cookies, cookieHeader: cookies.map((c) => `${c.name}=${c.value}`).join('; ') };
+    const authHeaders: Record<string, string> = { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') };
+    return { cookies, authHeaders };
+  }
+
+  /**
+   * JSON-API login: POST {username, password} as JSON to loginUrl.
+   * Session extraction: Set-Cookie (preferred) or bearer token from the JSON
+   * response body (tokenField or common keys: token, access_token, jwt).
+   */
+  private async jsonLogin(ctx: ScanContext, cred: CredentialProfile): Promise<Session | undefined> {
+    const loginUrl = cred.loginUrl ?? new URL('/login', ctx.target.origin + '/').toString();
+    const raw = await ctx.client.postJson(loginUrl, { username: cred.username, password: cred.password });
+    if (!raw.ok) return undefined;
+    const setCookie = raw.headers['set-cookie'] ?? '';
+    const cookies = parseCookies(setCookie).filter((c) => c.value !== '' && c.value !== 'deleted');
+    let bearerToken: string | undefined;
+    try {
+      const parsed = JSON.parse(raw.body) as Record<string, unknown>;
+      const tokenKeys = cred.tokenField ? [cred.tokenField, 'token', 'access_token', 'jwt'] : ['token', 'access_token', 'jwt'];
+      for (const key of tokenKeys) {
+        const v = parsed[key];
+        if (typeof v === 'string' && v.length > 8) { bearerToken = v; break; }
+      }
+    } catch { /* not JSON */ }
+    if (cookies.length === 0 && !bearerToken) return undefined;
+    const authHeaders: Record<string, string> = {};
+    if (cookies.length > 0) authHeaders.cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    if (bearerToken) authHeaders.authorization = `Bearer ${bearerToken}`;
+    return { cookies, authHeaders, bearerToken };
   }
 
   /**
@@ -138,7 +175,7 @@ export class AuthenticatedProbeEngine implements Engine {
    */
   private async findProtectedPage(
     ctx: ScanContext,
-    session: { cookieHeader: string; cookies: Array<{ name: string; value: string }> },
+    session: Session,
   ): Promise<{ path: string; url: string } | undefined> {
     const origin = ctx.target.origin;
     const links = [
@@ -154,7 +191,7 @@ export class AuthenticatedProbeEngine implements Engine {
         if (/(logout|signin|signup|register)/i.test(u.pathname)) continue;
         anonProbes++;
         const [authed, anon] = await Promise.all([
-          ctx.client.get(u.toString(), { cookie: session.cookieHeader }),
+          ctx.client.get(u.toString(), session.authHeaders),
           ctx.client.get(u.toString()),
         ]);
         if (!authed.ok) continue;
@@ -173,7 +210,7 @@ export class AuthenticatedProbeEngine implements Engine {
 
   private async logoutInvalidationCheck(
     ctx: ScanContext,
-    session: { cookieHeader: string; cookies: Array<{ name: string; value: string }> },
+    session: Session,
     protectedPage: { path: string; url: string },
   ): Promise<RawFinding | undefined> {
     const logoutUrl = (ctx.crawl?.pages ?? [])
@@ -182,8 +219,8 @@ export class AuthenticatedProbeEngine implements Engine {
     if (!logoutUrl) return undefined;
     if (!ctx.guard.inScope(logoutUrl)) return undefined;
 
-    await ctx.client.get(logoutUrl, { cookie: session.cookieHeader });
-    const after = await ctx.client.get(protectedPage.url, { cookie: session.cookieHeader });
+    await ctx.client.get(logoutUrl, session.authHeaders);
+    const after = await ctx.client.get(protectedPage.url, session.authHeaders);
     if (!after.ok) return undefined;
     const afterPath = new URL(after.finalUrl).pathname;
     if (after.status !== 200 || /login|signin|auth/i.test(afterPath)) return undefined; // invalidated → pass
@@ -220,7 +257,7 @@ export class AuthenticatedProbeEngine implements Engine {
 
   private async jwtForgeryCheck(
     ctx: ScanContext,
-    session: { cookieHeader: string; cookies: Array<{ name: string; value: string }> },
+    session: Session,
     protectedPage: { path: string; url: string },
   ): Promise<RawFinding | undefined> {
     const sessionCookie = session.cookies.find((c) => looksLikeJwt(c.value));
@@ -248,11 +285,12 @@ export class AuthenticatedProbeEngine implements Engine {
 
     for (const attempt of forgedTokens) {
       if (ctx.signal.aborted) break;
-      const forgedCookie = session.cookieHeader.replace(
-        `${sessionCookie.name}=${sessionCookie.value}`,
-        `${sessionCookie.name}=${attempt.token}`,
-      );
-      const res = await ctx.client.get(protectedPage.url, { cookie: forgedCookie });
+      const forgedAuthHeaders: Record<string, string> = { ...session.authHeaders };
+      const existingCookie = forgedAuthHeaders.cookie ?? '';
+      forgedAuthHeaders.cookie = existingCookie
+        ? existingCookie.replace(`${sessionCookie.name}=${sessionCookie.value}`, `${sessionCookie.name}=${attempt.token}`)
+        : `${sessionCookie.name}=${attempt.token}`;
+      const res = await ctx.client.get(protectedPage.url, forgedAuthHeaders);
       if (!res.ok || res.status !== 200) continue;
       if (/login|signin|auth/i.test(new URL(res.finalUrl).pathname)) continue; // redirected to login = rejected
       return {
@@ -292,7 +330,7 @@ export class AuthenticatedProbeEngine implements Engine {
    */
   private async roleMatrixCheck(
     ctx: ScanContext,
-    primarySession: { cookieHeader: string },
+    primarySession: Session,
     protectedPage: { path: string; url: string },
   ): Promise<RawFinding | undefined> {
     const secondary = ctx.credentialsSecondary!;
@@ -304,7 +342,7 @@ export class AuthenticatedProbeEngine implements Engine {
       return undefined;
     }
 
-    const res = await ctx.client.get(protectedPage.url, { cookie: sessionB.cookieHeader });
+    const res = await ctx.client.get(protectedPage.url, sessionB.authHeaders);
     if (!res.ok) return undefined;
     const finalPath = new URL(res.finalUrl).pathname;
     if (res.status !== 200 || /login|signin|auth/i.test(finalPath)) return undefined; // denied → pass
@@ -338,7 +376,7 @@ export class AuthenticatedProbeEngine implements Engine {
 
   private async surfaceMap(
     ctx: ScanContext,
-    session: { cookieHeader: string; cookies: Array<{ name: string; value: string }> },
+    session: Session,
   ): Promise<RawFinding | undefined> {
     const origin = ctx.target.origin;
     const links = [
@@ -357,7 +395,7 @@ export class AuthenticatedProbeEngine implements Engine {
         const u = new URL(link);
         if (u.origin !== origin) continue;
         requests++;
-        const authed = await ctx.client.get(u.toString(), { cookie: session.cookieHeader });
+        const authed = await ctx.client.get(u.toString(), session.authHeaders);
         if (!authed.ok || authed.status !== 200) continue;
         authedOk++;
         const anon = await ctx.client.get(u.toString());

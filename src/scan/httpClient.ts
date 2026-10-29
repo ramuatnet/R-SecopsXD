@@ -99,6 +99,14 @@ export class ScopedHttpClient {
     return this.request('POST', url, { body, contentType: 'application/x-www-form-urlencoded' });
   }
 
+  async postJson(url: string, body: Record<string, unknown>, headers?: Record<string, string> | undefined): Promise<HttpResult> {
+    const opts: { body: string; contentType: string; headers?: Record<string, string> } = {
+      body: JSON.stringify(body), contentType: 'application/json',
+    };
+    if (headers !== undefined) opts.headers = headers;
+    return this.request('POST', url, opts);
+  }
+
   private async doRequest(
     method: string,
     url: string,

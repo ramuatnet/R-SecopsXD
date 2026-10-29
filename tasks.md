@@ -10,7 +10,7 @@ Drive it with a system prompt such as:
 
 Order matters. Build the control loop (Phase 3) before the Rust port (Phase 4/12). The loop is the differentiator; Rust is the performance layer.
 Status legend: [ ] todo · [~] in progress · [x] done · [!] blocked.
-Progress log: 2026-10-29 — T9.1/T9.2 done (scheduler, origin change watcher, webhook delta alerting with alert-dedup). T10.3 done (SARIF 2.1.0 export). 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
+Progress log: 2026-10-29 — JSON login support done (loginType:json + tokenField in credential profiles; authenticated probe handles bearer-token sessions). Precision/recall metrics done (computePrecisionRecall + CI gate). CycloneDX SBOM export done. SSE trace endpoint done. 2026-10-29 — T9.1/T9.2 done (scheduler, origin change watcher, webhook delta alerting with alert-dedup). T10.3 done (SARIF 2.1.0 export). 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
 Every capability is "done" only when its execution path, evidence, and tests exist. No relabeling missing work as done.
 1. Invariants (non-negotiable — regression-test these)
 I1 Single egress. All engine HTTP passes one scoped client that consults: payload guard → scope check (every redirect hop) → rate limit → concurrency cap → redaction.
@@ -217,7 +217,7 @@ Phase 9 — Realtime / Continuous Security
 Phase 10 — Enterprise
  T10.1 Postgres driver behind repository interface (SQLite stays default).
  T10.2 RBAC + multi-tenancy (orgs, roles, per-target authz chains).
- [~] T10.3 SARIF export done (toSarif); CycloneDX SBOM + Dependency-Track push pending.
+ [x] T10.3 SARIF + CycloneDX SBOM export done (toSarif + toCycloneDX). Dependency-Track push pending.
  T10.4 External KMS for credential profiles.
  T10.5 Horizontal scale: engine worker pool, job queue, resumable scans.
 Phase 11 — Testing, Ground Truth, Benchmarks

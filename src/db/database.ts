@@ -116,6 +116,11 @@ const MIGRATIONS: string[] = [
   DROP TABLE credentials;
   ALTER TABLE credentials_v3 RENAME TO credentials;
   `,
+  // 005: JSON-API login support
+  `
+  ALTER TABLE credentials ADD COLUMN login_type TEXT DEFAULT 'form';
+  ALTER TABLE credentials ADD COLUMN token_field TEXT;
+  `,
   // 004: target model (v2 Phase 1) — knowledge graph + append-only delta chain
   `
   CREATE TABLE IF NOT EXISTS model_nodes (
@@ -279,30 +284,35 @@ export class Database {
 
   setCredentials(targetId: string, cred: {
     username: string; password: string; role?: string | undefined;
+    loginType?: string | undefined; tokenField?: string | undefined;
     loginUrl?: string | undefined; usernameField?: string | undefined; passwordField?: string | undefined;
   }): void {
     const role = cred.role ?? 'primary';
     this.db.prepare(
-      'INSERT INTO credentials (target_id, role, username, password_enc, login_url, username_field, password_field, created_at) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(target_id, role) DO UPDATE SET username = excluded.username, ' +
+      'INSERT INTO credentials (target_id, role, username, password_enc, login_url, username_field, password_field, login_type, token_field, created_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(target_id, role) DO UPDATE SET username = excluded.username, ' +
       'password_enc = excluded.password_enc, login_url = excluded.login_url, username_field = excluded.username_field, ' +
-      'password_field = excluded.password_field, created_at = excluded.created_at',
+      'password_field = excluded.password_field, login_type = excluded.login_type, token_field = excluded.token_field, ' +
+      'created_at = excluded.created_at',
     ).run(
       targetId, role, cred.username, this.encryptSecret(cred.password),
       cred.loginUrl ?? null, cred.usernameField ?? null, cred.passwordField ?? null,
+      cred.loginType ?? 'form', cred.tokenField ?? null,
       new Date().toISOString(),
     );
     this.audit({ actor: 'operator', action: 'target.credentials.set', details: { targetId, username: cred.username, role } });
   }
 
-  getCredentials(targetId: string, role = 'primary'): { username: string; password: string; role: string; loginUrl?: string; usernameField?: string; passwordField?: string } | undefined {
+  getCredentials(targetId: string, role = 'primary'): { username: string; password: string; role: string; loginType: string; tokenField?: string; loginUrl?: string; usernameField?: string; passwordField?: string } | undefined {
     const r = this.db.prepare('SELECT * FROM credentials WHERE target_id = ? AND role = ?').get(targetId, role) as Record<string, unknown> | undefined;
     if (!r) return undefined;
-    const cred: { username: string; password: string; role: string; loginUrl?: string; usernameField?: string; passwordField?: string } = {
+    const cred: { username: string; password: string; role: string; loginType: string; tokenField?: string; loginUrl?: string; usernameField?: string; passwordField?: string } = {
       username: r.username as string,
       password: this.decryptSecret(r.password_enc as string),
       role: r.role as string,
+      loginType: (r.login_type as string) ?? 'form',
     };
+    if (r.token_field) cred.tokenField = r.token_field as string;
     if (r.login_url) cred.loginUrl = r.login_url as string;
     if (r.username_field) cred.usernameField = r.username_field as string;
     if (r.password_field) cred.passwordField = r.password_field as string;
