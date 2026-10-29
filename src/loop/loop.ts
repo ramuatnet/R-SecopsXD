@@ -22,6 +22,7 @@ import type { ScopedHttpClient, RequestStats } from '../scan/httpClient.ts';
 import type { ScopeGuard } from '../safety/guard.ts';
 import type { ScanContext, CrawlCorpus, CredentialProfile } from '../engines/types.ts';
 import { normalizeFinding } from '../scan/normalize.ts';
+import { dedupeFindings } from '../core/ids.ts';
 import { log } from '../logging.ts';
 
 export interface LoopAction {
@@ -229,8 +230,10 @@ export async function runSubscan(
     workDir: ctx.workDir, crawl: subCorpus, log: (m, f) => log.debug(m, f),
   };
   const result = await engine.run(subCtx);
-  const findings = (result.findings as import('../core/types.ts').RawFinding[]).map((raw) =>
-    normalizeFinding(raw, { target: ctx.target, engineId: 'builtin.http-observation', adapter: false, triages: new Map() }),
+  const findings = dedupeFindings(
+    (result.findings as import('../core/types.ts').RawFinding[]).map((raw) =>
+      normalizeFinding(raw, { target: ctx.target, engineId: 'builtin.http-observation', adapter: false, triages: ctx.db.getTriages() }),
+    ),
   );
   return { pages, findings };
 }

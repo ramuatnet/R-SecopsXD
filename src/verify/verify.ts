@@ -151,26 +151,20 @@ export async function verifyByType(finding: Finding, client: ScopedHttpClient): 
   }
 }
 
-/** Generic re-observation for findings without a dedicated validator. */
+/**
+ * Generic re-observation for findings without a dedicated validator.
+ * T-W3: NEVER promotes on a body-line match alone — that's fragile and
+ * produces false positives. Returns inconclusive for unknown types; the
+ * per-type validators in verifyByType handle the known types properly.
+ */
 export async function reobserve(finding: Finding, client: ScopedHttpClient): Promise<VerifyReport> {
-  const ev = finding.evidence.find((e) => e.kind === 'http');
   const base = { findingId: finding.id, rawId: finding.provenance[0]?.rawId ?? '' };
-  if (!ev || ev.kind !== 'http' || ev.request.method !== 'GET') {
-    return { ...base, verdict: 'inconclusive', rationale: 'no GET observation to replay', recheck: undefined };
-  }
-  const excerpt = (ev.response?.bodyExcerpt ?? '').trim();
-  if (excerpt === '') {
-    return { ...base, verdict: 'inconclusive', rationale: 'original evidence had no body excerpt', recheck: undefined };
-  }
-  const res = await client.get(ev.request.url);
-  if (!res.ok) return { ...base, verdict: 'inconclusive', rationale: 're-fetch failed', recheck: undefined };
-  const marker = excerpt.split('\n')[0]!.slice(0, 60);
-  if (res.body.includes(marker)) {
-    return { ...base, verdict: 'confirmed', rationale: 're-observation reproduced the original evidence',
-      recheck: { request: `GET ${ev.request.url}`, observation: redactText(res.body.slice(0, 200)) } };
-  }
-  return { ...base, verdict: 'rejected', rationale: 're-observation no longer reproduces the original evidence',
-    recheck: { request: `GET ${ev.request.url}`, observation: redactText(res.body.slice(0, 200)) } };
+  return {
+    ...base,
+    verdict: 'inconclusive',
+    rationale: 'no type-specific validator for this finding type; manual review required (T-W3: body-line matching removed as unreliable)',
+    recheck: undefined,
+  };
 }
 
 // ---------- T5.3 promotion rules + audit ----------

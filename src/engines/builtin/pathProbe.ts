@@ -365,6 +365,31 @@ export class PathProbeEngine implements Engine {
       }
     }
 
+    // T-W5: host-header injection probe (raw socket)
+    if (ctx.mode === 'active' && !ctx.signal.aborted) {
+      const { probeHostHeaderInjection } = await import('./rawProbes.ts');
+      const hh = await probeHostHeaderInjection(origin);
+      if (hh?.vulnerable) {
+        findings.push({
+          rawId: 'host-header-injection',
+          title: 'Host header injection detected',
+          category: 'A01',
+          cwe: 20,
+          severity: 'high',
+          confidence: 'high',
+          status: 'confirmed',
+          asset: ctx.target.origin,
+          locator: '/',
+          evidence: [{ kind: 'process', command: 'raw socket: GET with attacker Host header', observation: hh.evidence }],
+          explanation:
+            'The application reflects an attacker-controlled Host header in its response. This enables ' +
+            'host-header injection attacks including password-reset poisoning and cache poisoning.',
+          remediation: 'Validate the Host header against an allow-list or construct URLs from configuration, not the Host header.',
+          references: ['https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/017-Testing_for_Host_Header_Injection.html'],
+        });
+      }
+    }
+
     ctx.log('path probe finished', { probes, findings: findings.length });
     return { findings, version: 'builtin' };
   }
