@@ -311,6 +311,52 @@ export function targetModel(app: App): Handler {
   };
 }
 
+export function sseTrace(app: App): Handler {
+  return (ctx: RequestContext) => {
+    const scan = app.db.getScan(ctx.params.id!);
+    if (!scan) bad(404, 'not_found', 'scan not found');
+    const encoder = new TextEncoder();
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = (event: string, data: unknown): void => {
+          controller.enqueue(encoder.encode(`event: ${event}
+data: ${JSON.stringify(data)}
+
+`));
+        };
+        // Send the current engine statuses
+        send('engines', scan.engines);
+        send('coverage', scan.coverage);
+        send('stats', scan.stats);
+        // Poll for changes every 2s until scan completes
+        let lastEngineCount = scan.engines.length;
+        interval = setInterval(() => {
+          const fresh = app.db.getScan(scan.id);
+          if (!fresh) { clearInterval(interval); controller.close(); return; }
+          if (fresh.engines.length !== lastEngineCount) {
+            lastEngineCount = fresh.engines.length;
+            send('engines', fresh.engines);
+          }
+          if (['completed', 'failed', 'cancelled'].includes(fresh.status)) {
+            send('done', { status: fresh.status, findings: fresh.stats.totalFindings });
+            clearInterval(interval);
+            controller.close();
+          }
+        }, 2000);
+      },
+      cancel() { if (interval) clearInterval(interval); },
+    });
+    return new Response(stream, {
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+      },
+    });
+  };
+}
+
 export function targetSummary(app: App): Handler {
   return (ctx: RequestContext) => {
     const target: Target | undefined = app.db.getTarget(ctx.params.id!);

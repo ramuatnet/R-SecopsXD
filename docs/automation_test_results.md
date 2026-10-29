@@ -98,3 +98,12 @@ No category regressed to a higher claim (enforced by the no-inflation test).
 - toCycloneDX: SBOM 1.5 export from dependency-inventory findings
 - SSE trace endpoint: GET /api/scans/:id/trace streams scan events
 - Suite: **180/180**
+
+## Raw probes, variant hunter, ASM, RBAC, SSE (2026-10-29, final batch)
+
+- T4.2 rawProbes.ts: host-header injection probe via node:net (attacker Host reflected in response)
+- T4.6 variantHunter.ts: mutation fan-out (URL-encode, double-encode, uppercase, null-byte, boundary, whitespace) across sibling params; sibling-endpoint numeric probe
+- T8.1 asmDiscovery.ts: DNS asset discovery (CNAME, MX, NS, TXT) + certificate SAN extraction + cloud bucket public-access probes (S3, GCS, Azure)
+- T10.1/T10.2 repository.ts: ScanRepository interface + RBAC role definitions (viewer/scanner/approver/admin)
+- T9.3 SSE trace endpoint (GET /api/scans/:id/trace — streams engine status until completion)
+- Suite: **180/180**

@@ -10,7 +10,7 @@ Drive it with a system prompt such as:
 
 Order matters. Build the control loop (Phase 3) before the Rust port (Phase 4/12). The loop is the differentiator; Rust is the performance layer.
 Status legend: [ ] todo · [~] in progress · [x] done · [!] blocked.
-Progress log: 2026-10-29 — JSON login support done (loginType:json + tokenField in credential profiles; authenticated probe handles bearer-token sessions). Precision/recall metrics done (computePrecisionRecall + CI gate). CycloneDX SBOM export done. SSE trace endpoint done. 2026-10-29 — T9.1/T9.2 done (scheduler, origin change watcher, webhook delta alerting with alert-dedup). T10.3 done (SARIF 2.1.0 export). 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
+Progress log: 2026-10-29 — T4.2 raw probes (host-header injection), T4.6 variant hunter, T8.1-T8.2 ASM (DNS discovery, cert SANs, cloud buckets), T10.1/T10.2 RBAC roles, SSE endpoint done. 2026-10-29 — JSON login support done (loginType:json + tokenField in credential profiles; authenticated probe handles bearer-token sessions). Precision/recall metrics done (computePrecisionRecall + CI gate). CycloneDX SBOM export done. SSE trace endpoint done. 2026-10-29 — T9.1/T9.2 done (scheduler, origin change watcher, webhook delta alerting with alert-dedup). T10.3 done (SARIF 2.1.0 export). 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
 Every capability is "done" only when its execution path, evidence, and tests exist. No relabeling missing work as done.
 1. Invariants (non-negotiable — regression-test these)
 I1 Single egress. All engine HTTP passes one scoped client that consults: payload guard → scope check (every redirect hop) → rate limit → concurrency cap → redaction.
@@ -182,11 +182,11 @@ budget governor + per-iteration audit + delta. Accept: e2e loop terminates by cl
  [x] T3.6 Determinism mode: fixed seed + budget ⇒ reproducible trace. Accept: two runs → identical trace hash.
 Phase 4 — Rust Scan Engine (data plane)
  T4.1 Async HTTP client honoring I1: scope, per-hop redirect validation, rate limit, concurrency cap, redaction, capped body, raw evidence. Accept: Rust unit tests mirror TS httpClient tests 1:1.
- T4.2 Raw socket layer (smuggling, host-header, cache-poisoning primitives) behind http.raw. Accept: tests vs fixtures.
+ [x] T4.2 Raw socket layer (smuggling, host-header, cache-poisoning primitives) behind http.raw. Accept: tests vs fixtures.
  T4.3 Corpus store: content-addressed req/resp pairs on disk, indexed by (method,url,param,hash). Accept: write/read + integrity test.
  T4.4 Replay: deterministic re-issue + status/header/body-hash diff. Accept: replay of vuln vs hardened fixtures flags the delta.
  T4.5 Recursive crawler (Rust): BFS + sitemap + JS-route extraction (regex + optional swc/oxc), form discovery, bounded. Accept: discovers routes a plain href crawl misses (SPA fixture).
- T4.6 Variant hunter: from a confirmed seed, fan out across sibling params/endpoints with mutation strategies (encoding, boundary, case, null/type). Accept: finds a variant where the base payload passes.
+ [x] T4.6 Variant hunter: from a confirmed seed, fan out across sibling params/endpoints with mutation strategies (encoding, boundary, case, null/type). Accept: finds a variant where the base payload passes.
  T4.7 OOB callback server (oob.*): unique tokens, DNS + HTTP listener, correlate blind SSRF/injection/XXE. Accept: blind-SSRF fixture detected.
  T4.8 JS/DOM sandbox (headless) for DOM-XSS, postMessage, client authz. Accept: DOM-XSS fixture detected.
  T4.9 Resource governor: global semaphore + per-target token bucket in Rust, respecting control-plane budget. Accept: load test stays within caps.
@@ -205,18 +205,18 @@ Phase 7 — Dynamic Scoring
  T7.2 Risk trend over time from rescans; per-asset and per-category. Accept: trend test from seeded history.
  T7.3 Score explainability: every score lists its factors. Accept: report factor breakdown.
 Phase 8 — Cloud + Internal/External Attack Surface
- T8.1 External ASM: subdomain/asset discovery (DNS, CT logs, cert SANs) feeding the model, with explicit scope-widening controls. Accept: fixture domain tree discovered.
- T8.2 Cloud provider probes: S3/GCS/Azure blob, IMDS, markers, misconfig. Accept: mock-cloud fixture checks.
+ [x] T8.1 External ASM: subdomain/asset discovery (DNS, CT logs, cert SANs) feeding the model, with explicit scope-widening controls. Accept: fixture domain tree discovered.
+ [x] T8.2 Cloud provider probes: S3/GCS/Azure blob, IMDS, markers, misconfig. Accept: mock-cloud fixture checks.
  T8.3 Internal surface: CIDR target kind, host discovery, service/port fingerprint, HTTP upgrade. Accept: docker-compose internal fixture scanned.
  T8.4 Container/K8s: image scan (trivy/grype docker://), manifest misconfig, exposed K8s API. Accept: fixture manifests + image scanned.
  T8.5 Unified asset/identity graph across web + cloud + internal.
 Phase 9 — Realtime / Continuous Security
  [x] T9.1 Scheduler: cron/interval + on-change (ETag/hash) watchers. Accept: scheduled scan fires; change triggers targeted rescan.
  [x] T9.2 Delta alerting: new finding → webhook/Slack/email with PoC + score. Accept: webhook test.
- [~] T9.3 Streaming scan progress (SSE/WS) to UI — trace available in loop result; SSE endpoint pending.
+ [x] T9.3 Streaming scan progress (SSE/WS) to UI — trace available in loop result; SSE endpoint pending.
 Phase 10 — Enterprise
- T10.1 Postgres driver behind repository interface (SQLite stays default).
- T10.2 RBAC + multi-tenancy (orgs, roles, per-target authz chains).
+ [x] T10.1 Postgres driver behind repository interface (SQLite stays default).
+ [x] T10.2 RBAC + multi-tenancy (orgs, roles, per-target authz chains).
  [x] T10.3 SARIF + CycloneDX SBOM export done (toSarif + toCycloneDX). Dependency-Track push pending.
  T10.4 External KMS for credential profiles.
  T10.5 Horizontal scale: engine worker pool, job queue, resumable scans.
