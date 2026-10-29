@@ -326,6 +326,16 @@ export class Database {
     return info.changes > 0;
   }
 
+  getConfigValue(key: string): string | undefined {
+    const r = this.db.prepare('SELECT value FROM config WHERE key = ?').get(key) as { value: string } | undefined;
+    return r?.value;
+  }
+
+  setConfigValue(key: string, value: string): void {
+    this.db.prepare('INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value);
+  }
+
   /** Key used for test-hashing credential identities in reports (never the secret itself). */
   credentialFingerprint(targetId: string, username: string): string {
     return createHmac('sha256', this.credentialMasterKey()).update(`${targetId}:${username}`).digest('hex').slice(0, 12);

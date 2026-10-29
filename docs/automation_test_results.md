@@ -82,3 +82,10 @@ No category regressed to a higher claim (enforced by the no-inflation test).
   (DELETE → safety_blocked), cumulative request budget (budget_exhausted), header +
   body secret redaction, 256 KiB body cap
 - Suite: **155/155** (6 new bridge/engine tests)
+
+## Continuous security + SARIF (2026-10-29)
+
+- T9.1 ScanScheduler (interval rescans, error-isolated) + originChanged watcher (ETag/length baseline → targeted rescan trigger)
+- T9.2 alertOnNewFindings: fingerprint diff vs previous scan → webhook POST with scores; alert-dedup prevents re-alerting the same finding
+- T10.3 toSarif: SARIF 2.1.0 with rules, levels, stable partialFingerprints
+- Suite: **164/164** (5 new continuous tests)

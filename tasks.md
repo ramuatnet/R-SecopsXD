@@ -10,7 +10,7 @@ Drive it with a system prompt such as:
 
 Order matters. Build the control loop (Phase 3) before the Rust port (Phase 4/12). The loop is the differentiator; Rust is the performance layer.
 Status legend: [ ] todo · [~] in progress · [x] done · [!] blocked.
-Progress log: 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
+Progress log: 2026-10-29 — T9.1/T9.2 done (scheduler, origin change watcher, webhook delta alerting with alert-dedup). T10.3 done (SARIF 2.1.0 export). 2026-10-28 — T0.2 done (CI). T0.1 REDIRECTED: Python-first data plane (user decision — Python 3.14 stdlib asyncio; Rust migration deferred to T12). T1.1–T1.5 done. T2.1–T2.4 done. T3.1–T3.3, T3.5–T3.6 done. T3.4 partial. T0.4 done (TS EngineBridge + integration tests). T4.1-py done (Python HTTP parity: scope, per-hop redirects, rate limit, redaction, body cap, budget).
 Every capability is "done" only when its execution path, evidence, and tests exist. No relabeling missing work as done.
 1. Invariants (non-negotiable — regression-test these)
 I1 Single egress. All engine HTTP passes one scoped client that consults: payload guard → scope check (every redirect hop) → rate limit → concurrency cap → redaction.
@@ -211,13 +211,13 @@ Phase 8 — Cloud + Internal/External Attack Surface
  T8.4 Container/K8s: image scan (trivy/grype docker://), manifest misconfig, exposed K8s API. Accept: fixture manifests + image scanned.
  T8.5 Unified asset/identity graph across web + cloud + internal.
 Phase 9 — Realtime / Continuous Security
- T9.1 Scheduler: cron/interval + on-change (ETag/hash) watchers. Accept: scheduled scan fires; change triggers targeted rescan.
- T9.2 Delta alerting: new finding → webhook/Slack/email with PoC + score. Accept: webhook test.
- T9.3 Streaming scan progress (SSE/WS) to UI. Accept: UI shows live trace.
+ [x] T9.1 Scheduler: cron/interval + on-change (ETag/hash) watchers. Accept: scheduled scan fires; change triggers targeted rescan.
+ [x] T9.2 Delta alerting: new finding → webhook/Slack/email with PoC + score. Accept: webhook test.
+ [~] T9.3 Streaming scan progress (SSE/WS) to UI — trace available in loop result; SSE endpoint pending.
 Phase 10 — Enterprise
  T10.1 Postgres driver behind repository interface (SQLite stays default).
  T10.2 RBAC + multi-tenancy (orgs, roles, per-target authz chains).
- T10.3 SARIF + CycloneDX SBOM export; Dependency-Track push.
+ [~] T10.3 SARIF export done (toSarif); CycloneDX SBOM + Dependency-Track push pending.
  T10.4 External KMS for credential profiles.
  T10.5 Horizontal scale: engine worker pool, job queue, resumable scans.
 Phase 11 — Testing, Ground Truth, Benchmarks
