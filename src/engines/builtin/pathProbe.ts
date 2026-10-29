@@ -79,6 +79,26 @@ export class PathProbeEngine implements Engine {
       }));
 
     const candidates = [...PATHS, ...robotsPaths];
+
+    // Server-aware probing: when the banner says Tomcat/Coyote/JBoss/WildFly,
+    // probe Java-specific paths that the generic wordlist misses.
+    const serverBanner = (ctx.crawl?.pages ?? [])
+      .map((p) => p.headers['server'] ?? '')
+      .find((s) => s !== '') ?? '';
+    const isJava = /coyote|tomcat|jboss|wildfly|jetty/i.test(serverBanner);
+    if (isJava) {
+      const JAVA_PATHS: ProbeCandidate[] = [
+        { path: '/manager/html', title: 'Tomcat Manager exposed', category: 'A02' as const, cwe: 16, severity: 'critical' as const },
+        { path: '/host-manager', title: 'Tomcat Host Manager exposed', category: 'A02' as const, cwe: 16, severity: 'high' as const },
+        { path: '/examples/', title: 'Tomcat Examples exposed', category: 'A02' as const, cwe: 16, severity: 'medium' as const },
+        { path: '/docs/', title: 'Tomcat Documentation exposed', category: 'A02' as const, cwe: 16, severity: 'low' as const },
+        { path: '/WEB-INF/web.xml', title: 'WEB-INF/web.xml exposed', category: 'A02' as const, cwe: 538, severity: 'critical' as const },
+        { path: '/status', title: 'Tomcat Status page exposed', category: 'A02' as const, cwe: 16, severity: 'medium' as const },
+        { path: '/jmx-console/', title: 'JBoss JMX Console exposed', category: 'A02' as const, cwe: 16, severity: 'critical' as const },
+      ];
+      candidates.push(...JAVA_PATHS);
+      ctx.log('server-aware probing', { server: serverBanner, extraPaths: JAVA_PATHS.length });
+    }
     let probes = 0;
 
     for (const candidate of candidates) {

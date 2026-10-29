@@ -54,6 +54,14 @@ export class CrawlerLiteEngine implements Engine {
 
     enqueue(new URL('/', origin).toString());
 
+    // Fallback landing paths — enqueued ONLY if the root 404s (checked after
+    // the root page is processed). This preserves page budget for real links
+    // on healthy targets while still discovering content on dead-root targets.
+    const FALLBACK_PATHS = ['/index.jsp', '/index.html', '/login.jsp', '/login', '/home',
+      '/portal', '/welcome', '/start', '/main', '/app', '/web', '/dashboard'];
+    let rootProcessed = false;
+    let rootSucceeded = false;
+
     // robots.txt (informational; passive GET)
     const robotsUrl = new URL('/robots.txt', origin).toString();
     const robotsRes = await ctx.client.get(robotsUrl);
@@ -68,6 +76,16 @@ export class CrawlerLiteEngine implements Engine {
     while (queue.length > 0 && corpus.pages.length < this.maxPages && !ctx.signal.aborted) {
       const url = queue.shift()!;
       const res = await ctx.client.get(url);
+      if (!rootProcessed) {
+        rootProcessed = true;
+        rootSucceeded = res.ok && res.status === 200 && (res.headers['content-type'] ?? '').includes('text/html') && res.body.length > 0;
+        if (!rootSucceeded) {
+          // Root 404 or empty: enqueue fallback paths so discovery continues
+          for (const fp of FALLBACK_PATHS) {
+            enqueue(new URL(fp, origin).toString());
+          }
+        }
+      }
       // Error pages are captured too — observers need them (e.g. verbose stack traces).
       const contentType = res.ok ? (res.headers['content-type'] ?? '') : '';
       const isText = contentType.includes('text/html') || contentType.includes('text/plain') || contentType.includes('json');
