@@ -42,7 +42,7 @@ export const PROFILES: Profile[] = [
     targetKinds: ['webapp'],
     maxCrawlPages: 200,
     passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
-    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe'],
+    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe', 'builtin.blind-ssrf-probe', 'builtin.variant-hunter'],
   },
   {
     id: 'external-dast',
@@ -51,7 +51,16 @@ export const PROFILES: Profile[] = [
     targetKinds: ['webapp'],
     maxCrawlPages: 200,
     passiveEngines: ['builtin.crawler-lite', 'builtin.http-observation', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.endpoint-discovery'],
-    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe', 'adapter.zap', 'adapter.nuclei'],
+    activeEngines: ['builtin.path-probe', 'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.redirect-probe', 'builtin.authenticated-probe', 'builtin.graphql-probe', 'builtin.blind-ssrf-probe', 'adapter.zap', 'adapter.nuclei'],
+  },
+  {
+    id: 'internal-scan',
+    name: 'Internal Network Scan',
+    description: 'CIDR block scan: host discovery, TCP port scan, service fingerprinting, version→CVE matching. Requires an explicitly registered CIDR target.',
+    targetKinds: ['cidr'],
+    maxCrawlPages: 0,
+    passiveEngines: [],
+    activeEngines: ['builtin.internal-scan'],
   },
   {
     id: 'source-review',

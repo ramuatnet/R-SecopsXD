@@ -18,7 +18,7 @@ export interface PortScanResult {
 
 const COMMON_PORTS = [80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090, 3306, 5432, 6379, 27017, 22, 21, 23, 25, 3389];
 
-function scanPort(host: string, port: number, timeoutMs = 3000): Promise<{ open: boolean; banner?: string }> {
+export function scanPort(host: string, port: number, timeoutMs = 3000): Promise<{ open: boolean; banner?: string }> {
   return new Promise((resolve) => {
     const socket: Socket = netConnect({ host, port });
     let banner = '';
@@ -57,7 +57,9 @@ export function expandCidr(cidr: string): string[] {
   const baseInt = ipToInt(base);
   const count = Math.pow(2, 32 - prefix);
   const ips: string[] = [];
-  for (let i = 1; i < count - 1 && ips.length < 254; i++) {
+  const start = prefix === 32 ? 0 : 1;
+  const end = prefix === 32 ? 1 : count - 1;
+  for (let i = start; i < end && ips.length < 254; i++) {
     ips.push(intToIp(baseInt + i));
   }
   return ips;

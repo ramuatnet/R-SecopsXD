@@ -28,7 +28,7 @@ export type ValidationStatus =
 
 export type ScanMode = 'passive' | 'active';
 
-export type TargetKind = 'webapp' | 'source';
+export type TargetKind = 'webapp' | 'source' | 'cidr';
 
 export interface Target {
   id: string;
