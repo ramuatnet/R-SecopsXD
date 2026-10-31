@@ -441,3 +441,31 @@ CI: **green** on the closing pass — https://github.com/ramuatnet/R-SecopsXD/ac
 Remaining deliberately-unbuilt (unchanged): Temporal worker (zero-dep ADR), Kafka-native client
 (HTTP proxy adapter is the zero-dep path), real-cloud E5, public OOB host (T4.7), advisory snapshot
 refresh cadence (L1 operational item).
+
+---
+
+## newtasks.md E1–E6 — implemented (2026-10-31, 0bf2a49, CI green 41189922135)
+
+- **E1 Engagement/RoE**: engagement entity (migration 008) with scope/window/contacts/emergency
+  stop/rate ceiling/permitted classes/signer/attestation; window refusal + per-scan ceiling bucket +
+  exploit-class gate enforced at the executor (violations carry `blocked_by_roe`, never silent
+  skips); `POST /api/engagements`, `GET /api/engagements/:id`, `POST /api/engagements/:id/stop`
+  (aborts in-flight scans in scope); read-only default when none registered (I19/I20).
+- **E2 Exploit tier**: `exploited` status above `confirmed` with a first-class artefact
+  (impact/reversibility/request count/observed delta) + transcript evidence; six per-class
+  exploiters, each ≤3 requests and reversible (SQLi UNION version(), SSRF canary, traversal
+  known-safe file, IDOR unauthenticated re-fetch, XSS static unencoded proof, open-redirect
+  canary follow-through); safe-exploit payload allowlist where the allowlist wins over the
+  destructive patterns; `exploit_unavailable` for unproven classes.
+- **E3 Retest**: `POST /api/targets/:id/retest` — locator-filtered (I22), same verifier re-observes,
+  `fixed`/`regressed` with persisted retest evidence, 5/hour/target debounce; escalated findings
+  excluded from auto-close (E6.3).
+- **E4 Deliverable**: `report?format=deliverable` — client-ready HTML with scope/RoE, findings by
+  risk (impact + PoC + evidence grade + exploit status + retest), loud not-tested section;
+  `400 blocked_by_roe` without a signed engagement.
+- **E5 Controls**: chapter-level ASVS/WSTG/PCI mapping per OWASP category;
+  `report?format=evidence-pack` exports timestamps + retest status + coverage verdicts with
+  control ids; unmapped categories surface as gaps.
+- **E6 Escalation**: `POST .../findings/:fid/escalate` + `GET /api/escalations` — context payload,
+  preserved through retests.
+- CI green: https://github.com/ramuatnet/R-SecopsXD/actions/runs/41189922135. Suite: **279/279**.
