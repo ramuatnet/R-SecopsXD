@@ -502,3 +502,27 @@ pipeline diagram, responsibility matrix, and implementation map.
   documented in ARCHITECTURE.md, not faked.
 
 Suite: 293 (289 pass + 4 honest environment skips). CI green: 41196969351.
+
+---
+
+## edgetask.md pending/partial items closed (2026-10-31, 780e672, CI green 41199599201)
+
+- **§1.1 bus-ingress gate**: scope manifests persisted (migration 009: `scope_manifests` +
+  `origin_candidates`); `POST/GET /api/manifests`; `ManifestIngressGate` rejects out-of-scope
+  events AT THE BUS with `blocked_by_scope` (asset-shaped keys enforced; port policy on
+  probe/finding topics). Verified live: manifest created via API on the running server.
+- **EDGE-04 pre-probe**: host-infra probes in two stages — the web-port batch classifies each IP;
+  an edge-classified IP continues ONLY with manifest-permitted ports. Non-manifest ports are
+  never probed (was: filtered post-scan).
+- **EDGE-02/HON-01 end-to-end**: `engine.degraded` published on the bus for degraded engines
+  (asset-discovery resolver/CT/whois failure) and NO_OP_SUSPECT runs.
+- **HON-04**: unbalanced reconciliation flips category status to `ASSESSMENT_FAILED` (was
+  note-only).
+- **ORIG-01/03**: `origin_candidates` table; `GET /api/origin-candidates` +
+  `POST /api/origin-candidates/:id/approve` (human approval gate before probing).
+- **§5**: `fingerprintConfidence` formula (0.35 stack + 0.30 banner + 0.20 corroboration − 0.40
+  edge penalty; edge-derived hints cap at candidate).
+- **§7**: governor `setSignalHandler` → `governor.signal` bus topic (throttle/WAF/profile-shift/
+  breaker); WAF block-page structural check (≥2 markers or 1 marker + short non-form body);
+  profile shift active→passive→discovery-only on sustained signals.
+- **§9**: HIGH_PORT findings re-probed independently; a failed re-probe downgrades to candidate.
