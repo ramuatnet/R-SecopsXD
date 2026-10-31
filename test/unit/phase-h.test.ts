@@ -58,8 +58,16 @@ test('H2/H3: middlebox (silent connects on many ports) → suppressed with count
   try {
     const res = await engine.run(ctxFor(`http://localhost:${port}`));
     const portFindings = res.findings.filter((f) => f.rawId === 'port-open');
-    const highs = portFindings.filter((f) => f.severity === 'high');
-    assert.equal(highs.length, 0, 'no phantom high-severity ports from a silent middlebox');
+    // Phantom = an UNVERIFIED connect claim carrying class severity. A real
+    // banner-verified service in the environment (e.g. the runner's sshd on 22)
+    // is a true positive, not a phantom.
+    const phantoms = portFindings.filter((f) => f.title?.includes('unverified') && f.severity !== 'info');
+    assert.equal(phantoms.length, 0, 'no unverified claim may carry class severity');
+    for (const f of portFindings) {
+      if (f.severity === 'high') {
+        assert.ok(!f.title?.includes('unverified'), 'high severity only on verified services');
+      }
+    }
     const interference = res.findings.find((f: { rawId?: string }) => f.rawId === 'port-scan-interference');
     if (interference !== undefined) {
       assert.equal(interference.severity, 'low', 'H3: interference carries the low band');
@@ -124,12 +132,25 @@ test('H2: uniform silent middlebox signature is suppressible even at scale', () 
 });
 
 /** H4 (I17): the fixture ground-truth port must ALWAYS be reported — recall floor. */
-test('H4: recall floor — vuln-app port 8899 appears as a finding on every run', async () => {
+test('H4: recall floor — the fixture ground-truth port appears as a finding on every run', async () => {
   const engine = new HostInfraEngine();
-  const res = await engine.run(ctxFor('http://127.0.0.1:8899'));
-  const port8899 = res.findings.filter((f) => f.rawId === 'port-open' && (f.locator ?? '').endsWith(':8899'));
-  assert.ok(port8899.length === 1, `fixture port must surface exactly once, got ${port8899.length}`);
-  assert.ok(port8899[0]!.severity === 'info' || port8899[0]!.severity === 'medium', '8899 is a dev port: info (unverified) or medium (verified)');
+  // Own the ground truth: bind 8899 when free (dev machines may already run
+  // the vuln-app fixture there — either way the port must be reported).
+  const listener = net.createServer((sock) => {
+    sock.once('data', () => sock.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi'));
+  });
+  await new Promise<void>((resolve, reject) => {
+    listener.once('error', () => resolve()); // already in use → the fixture is up
+    listener.listen(8899, '127.0.0.1', () => resolve());
+  });
+  try {
+    const res = await engine.run(ctxFor('http://127.0.0.1:8899'));
+    const port8899 = res.findings.filter((f) => f.rawId === 'port-open' && (f.locator ?? '').endsWith(':8899'));
+    assert.ok(port8899.length === 1, `fixture port must surface exactly once, got ${port8899.length}`);
+    assert.ok(port8899[0]!.severity === 'info' || port8899[0]!.severity === 'medium', '8899 is a dev port: info (unverified) or medium (verified)');
+  } finally {
+    listener.close();
+  }
   void portSeverity;
 });
 
