@@ -198,3 +198,57 @@ Baseline: scan 160fb8bf (TNEB standard-active) — 5 findings, zero vulnerabilit
   mechanism above is test-covered so the pack activates the moment the pinned binary lands.
 
 Suite: **212/212** (`npm run lint:templates` + `npm run canary` green). Server re-validated on TNEB.
+
+## newtask.md Phases C–F: unified asset graph, orchestration, risk (2026-10-31)
+
+**Phase C — graph + normalization (C1–C4):**
+- `src/graph/types.ts`: closed vocabularies — 19 node types, 10 edge types; NodeAssertion/
+  EdgeAssertion/AssetNode/AssetEdge/NormalizedEvent (OCSF-aligned: class_uid, activity_id,
+  observables, severity_raw + severity_norm, provenance).
+- `src/graph/uid.ts`: deterministic UIDs — `<type>:<base32(sha256(type|canonical_identity))>`;
+  canonical identity per type (webapp origin normalized, domains lowercased, ip:port verbatim).
+  Same asset from DNS, CT and port scan collapses to one node.
+- `src/graph/graph.ts`: bitemporal GraphStore over node:sqlite (migration 007) — upserts idempotent
+  per (type, identity), valid_from/valid_to/observed_at, nothing deleted only closed (re-observation
+  re-opens; history retained), bounded traverse(), fanout().
+- `db/postgres/001_asset_graph.sql`: the Postgres deployment of the same schema (JSONB attributes,
+  ltree adjacency path + GIST index, partial indexes on open edges, recursive blast-radius CTE).
+- `src/graph/adapters.ts`: one adapter per source family (EASM/scanner/DAST/CSPM) — findings route
+  by provenance engine (cloud-bucket by rawId); host-resolved → domain+ip nodes + resolves_to;
+  port-open → port node + exposes; service-identified → service node + runs; vulnerability findings
+  → finding node + found_on.
+- `src/graph/merger.ts`: EventStore + pure mergeEvents — dedupe key (class_uid, asset_uid,
+  observable_hash); raw severity of the FIRST source NEVER overwritten; normalized severity ratchets
+  up; provenance merges; times_seen counter.
+- `src/graph/query.ts` + `sync.ts`: blastRadius (bounded walk + blast factor) and the scan-finalize
+  seam — syncFindingsToGraph wired into the orchestrator (never breaks a scan; audited).
+
+**Phase D — orchestration (D1–D5):**
+- `src/safety/governor.ts`: global + per-asset token buckets, gentle/normal/aggressive profiles
+  (1/5/20 rps per asset, 100/500/2000 request ceilings per scan), adaptive throttle (429/503 or
+  >3s latency halves rate with exponential backoff, 10% recovery on success), kill switch per
+  target + global, per-sensor circuit breaker (3 failures → open 60s).
+- `src/safety/scopeGate.ts`: explicit approval records for domains/cidrs/origins (I13 — nothing
+  auto-expands; subdomain covered by approved parent).
+- `src/bus/bus.ts`: the six canonical topics with typed envelopes; in-process pub/sub now, Kafka/
+  Redpanda adapter maps 1:1 later.
+- `src/orchestration/assessAsset.ts`: trigger rules (web port + approved scope → scan.request;
+  DB/mgmt port → approval.gate, never auto-scanned) and the AssessAsset state machine (9 steps,
+  retry 3× with backoff, reverse-order compensation on abort, governor-bound safety-gate step).
+  Temporal port = each step becomes an activity with the same options.
+
+**Phase E3 — planner:** `src/orchestration/planner.ts` closes V8: fingerprint → capability tags
+(Tomcat/Coyote → manager paths + rsec-tomcat template family; PHP → .php set; GraphQL → introspection
+set; ES/docker/k8s → API checks; database/SMB/RDP/VNC → alert-only, zero probes; unknown → generic
+pack only, I8).
+
+**Phase F — risk (F1–F4):** `src/risk/risk.ts` — Risk = Base × Reachability × Exposure × Criticality
+× Blast clamped 0–100 with every factor stored; base = max(CVSS/10, EPSS×1.4, VPR/10) floored 0.05;
+blast log-fit to the spec's example (fan-out 1 → 0.6, 4 → ~1.2, cap 1.5). Worked example verified:
+identical CVE-9.8/EPSS-0.6 → 100 at the edge vs 4 on an isolated internal box (25×). Noise rules:
+2-of-3 confirmation gate, EPSS<0.01+unreachable → backlog, (asset_uid, cve) dedupe keeping max.
+
+**Validated live:** vuln-app standard-active scan → graph accumulated 18 nodes / 16 edges / 17
+events; cross-scan dedupe merged the repeat observation (times_seen=2); graph.synced audited.
+Suite: **238/238**. Sensors (E1), credentialed SSH/WinRM (E4), cloud metadata merge (E5) need
+external infrastructure — interfaces documented, not faked.

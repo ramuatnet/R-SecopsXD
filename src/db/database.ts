@@ -162,6 +162,61 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (scan_id, iteration)
   );
   `,
+  // 007 unified asset graph (newtask.md C1) — bitemporal nodes/edges + normalized events.
+  // Nothing is deleted: nodes/edges are closed via valid_to; history stays queryable.
+  `
+  CREATE TABLE IF NOT EXISTS graph_nodes (
+    uid TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    display TEXT NOT NULL,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT,
+    observed_at TEXT NOT NULL,
+    provenance_json TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_nodes_type_identity ON graph_nodes(type, identity);
+  CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type);
+  CREATE TABLE IF NOT EXISTS graph_edges (
+    uid TEXT PRIMARY KEY,
+    edge_type TEXT NOT NULL,
+    src_uid TEXT NOT NULL,
+    dst_uid TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT,
+    observed_at TEXT NOT NULL,
+    provenance_json TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(src_uid);
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_uid);
+  CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);
+  CREATE TABLE IF NOT EXISTS graph_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_uid TEXT NOT NULL,
+    activity_id TEXT NOT NULL,
+    asset_uid TEXT NOT NULL,
+    source_uid TEXT,
+    observables_json TEXT NOT NULL,
+    observable_hash TEXT NOT NULL,
+    severity_raw TEXT NOT NULL,
+    severity_norm TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    time TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    evidence_ref TEXT,
+    provenance_json TEXT NOT NULL DEFAULT '[]',
+    times_seen INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_events_dedupe
+    ON graph_events(class_uid, asset_uid, observable_hash);
+  CREATE INDEX IF NOT EXISTS idx_graph_events_asset ON graph_events(asset_uid);
+  `,
 ];
 
 export class Database {

@@ -25,6 +25,9 @@ import { dedupeFindings } from '../core/ids.ts';
 import { computeCoverage } from './coverage.ts';
 import { verifyByType, applyVerification } from '../verify/verify.ts';
 import { runLoopScan } from './loopRunner.ts';
+import { GraphStore } from '../graph/graph.ts';
+import { EventStore } from '../graph/merger.ts';
+import { syncFindingsToGraph } from '../graph/sync.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
 import { log } from '../logging.ts';
@@ -375,6 +378,15 @@ export class Orchestrator {
     const completedCoverage = ALL_CATEGORIES.map((cat) => coverage.find((c) => c.category === cat)!);
 
     this.db.insertFindings(scanId, deduped);
+    // C1–C3: feed the unified asset graph (never breaks the scan).
+    try {
+      const graph = new GraphStore(this.db.handle);
+      const events = new EventStore(this.db.handle);
+      const stats = syncFindingsToGraph(graph, events, deduped, scanId);
+      this.db.audit({ actor: 'system', action: 'graph.synced', details: { scanId, ...stats } });
+    } catch (e) {
+      log.warn('graph sync failed (scan unaffected)', { scanId, error: e instanceof Error ? e.message : String(e) });
+    }
     this.db.updateScan(scanId, {
       status: 'completed',
       finishedAt: new Date().toISOString(),
