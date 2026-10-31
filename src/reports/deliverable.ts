@@ -108,6 +108,15 @@ demonstrated with reversible, rate-limited requests under the engagement's rules
 <h2>3. Findings (${findings.length})</h2>
 ${findingsHtml || '<p>No findings.</p>'}
 
+<h2>3a. Edge-proxy behavior (informational)</h2>
+${(() => {
+  const edge = findings.filter((f) => f.suppressedBy !== undefined || f.surface === 'edge' || f.title.includes('[edge-proxy-behavior]') || f.title.includes('[edge-unverified]'));
+  if (edge.length === 0) return '<p>No edge-mediated observations.</p>';
+  return '<table><tr><th>Finding</th><th>Surface</th><th>Suppression</th></tr>' +
+    edge.map((f) => `<tr><td>${esc(f.title.slice(0, 90))}</td><td>${esc(f.surface ?? 'edge')}</td><td>${esc(f.suppressedBy ?? '—')}</td></tr>`).join('') +
+    '</table><p><em>Terminated at the edge — not origin vulnerabilities (edgetask.md §8.2).</em></p>';
+})()}
+
 <h2>4. Retest status</h2>
 <table><tr><th>Finding</th><th>Retest</th></tr>
 ${findings.map((f) => `<tr><td>${esc(f.title.slice(0, 60))}</td><td>${f.retest !== undefined ? esc(f.retest.result) : 'not retested'}</td></tr>`).join('')}

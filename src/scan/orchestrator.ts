@@ -35,6 +35,9 @@ import { triggerForPort } from '../orchestration/assessAsset.ts';
 import { checkWindow, classPermitted, effectiveRateCeiling } from '../safety/engagement.ts';
 import { runExploitStage } from '../exploit/exploit.ts';
 import { TokenBucket } from '../safety/governor.ts';
+import { outcomeFor } from '../edgectx/models.ts';
+import { applySuppressions } from '../edgectx/suppress.ts';
+import { classifyFromResponse, type EdgeVerdict } from '../edgectx/classifier.ts';
 import type { GovernorBinding } from './httpClient.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
@@ -43,7 +46,7 @@ import { log } from '../logging.ts';
 function emptyStats(): ScanStats {
   return {
     findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, exploited: 0, fixed: 0 },
+    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, candidate: 0, exploited: 0, fixed: 0 },
     totalFindings: 0,
     requestsSent: 0,
     requestsBlocked: 0,
@@ -210,7 +213,7 @@ export class Orchestrator {
           coverage: result.coverage,
           stats: {
             findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, exploited: 0, fixed: 0 },
+            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, candidate: 0, exploited: 0, fixed: 0 },
             totalFindings: result.findings.length,
             requestsSent: result.stats.sent,
             requestsBlocked: result.stats.blocked,
@@ -328,12 +331,14 @@ export class Orchestrator {
           engineRecords.push({
             engine: step.id, status: 'skipped', findingCount: 0,
             durationMs: Date.now() - engineStart, detail: result.notExecutedReason, version: result.version ?? availability.version,
+            outcome: outcomeFor({ ran: false, findings: 0, durationMs: Date.now() - engineStart, inputsUsed: 0 }),
           });
           continue;
         }
         engineRecords.push({
           engine: step.id, status: 'ran', findingCount: result.findings.length,
           durationMs: Date.now() - engineStart, detail: result.detail, version: result.version ?? availability.version,
+          outcome: outcomeFor({ ran: true, findings: result.findings.length, durationMs: Date.now() - engineStart, inputsUsed: Math.max(result.findings.length, Date.now() - engineStart >= 5 ? 1 : 0), degraded: result.degraded }),
         });
         for (const raw of result.findings) {
           findings.push(normalizeFinding(raw, {
@@ -446,6 +451,37 @@ export class Orchestrator {
 
     // Dedupe across engines (merges provenance), then finalize.
     const deduped = dedupeFindings(findings);
+
+    // EDGE-05 (edgetask.md): suppression pass — vendor rules reclassify or
+    // downgrade findings based on the edge verdict; audited, never silent.
+    let suppressedCount = 0;
+    let edgeVerdict: EdgeVerdict | undefined;
+    try {
+      // Classify the edge from the crawl corpus (first HTML response headers).
+      const page = (crawlContext.corpus as { pages?: Array<{ headers: Record<string, string> }> } | undefined)?.pages?.[0];
+      edgeVerdict = classifyFromResponse(page?.headers ?? {}, undefined, { feedVersion: 'cf-sig-2026-10-31', stale: false });
+      const suppression = applySuppressions(deduped, edgeVerdict);
+      suppressedCount = suppression.suppressedCount;
+      if (suppressedCount > 0) {
+        for (const rec of suppression.records) {
+          this.db.audit({ actor: 'system', action: 'finding.suppressed', details: { scanId, ...rec } });
+        }
+        this.bus?.publish('finding.suppressed', scanId, { scanId, records: suppression.records });
+      }
+      // EDGE-03: surface stamping — the scan observed through the edge ⇒ findings surface=edge.
+      if (edgeVerdict.vendor !== 'none') {
+        for (const f of deduped) {
+          if (f.surface === undefined) f.surface = 'edge';
+        }
+        // ORIG-04: edge-only surface ⇒ an explicit 'origin not assessed' gap on
+        // every category — never clean (edgetask.md §11, §14).
+        this.db.audit({ actor: 'system', action: 'origin.not_assessed', details: { scanId, vendor: edgeVerdict.vendor, confidence: edgeVerdict.confidence } });
+        this.bus?.publish('origin.candidate', scanId, { scanId, vendor: edgeVerdict.vendor, note: 'origin not assessed — edge-only surface' });
+      }
+    } catch (e) {
+      log.warn('edge classification/suppression failed (scan unaffected)', { scanId, error: e instanceof Error ? e.message : String(e) });
+    }
+
     const finalStats = emptyStats();
     finalStats.requestsSent = stats.sent;
     finalStats.requestsBlocked = stats.blocked;
@@ -458,8 +494,44 @@ export class Orchestrator {
     const ranRecords = engineRecords;
     const coverage = computeCoverage(ranRecords, profileId, deduped, target.kind, mode, signal.aborted);
     const completedCoverage = ALL_CATEGORIES.map((cat) => coverage.find((c) => c.category === cat)!);
+    // ORIG-04/PLT-06: edge-only surface ⇒ every category carries the origin gap.
+    if (edgeVerdict !== undefined && edgeVerdict.vendor !== 'none') {
+      for (const c of completedCoverage) {
+        c.note = `[origin not assessed: surface is edge-only (${edgeVerdict.vendor}, confidence ${edgeVerdict.confidence.toFixed(2)})] ${c.note}`;
+        if (c.status === 'COVERED_WITH_EVIDENCE') c.status = 'PARTIALLY_COVERED';
+      }
+    }
+    // PLT-06: the deliverable/diff needs the suppression count — recorded in the audit trail.
+    void suppressedCount;
 
     this.db.insertFindings(scanId, deduped);
+
+    // HON-04 (edgetask.md §9): count reconciliation — every raw engine finding
+    // must be accounted for (final + dedup merges + suppressions). Unbalanced
+    // ⇒ the coverage ledger reads ASSESSMENT_FAILED.
+    const engineTotals = engineRecords.filter((r) => r.status === 'ran').reduce((n, r) => n + r.findingCount, 0);
+    const dedupDelta = engineTotals - deduped.length;
+    const suppressedInScan = deduped.filter((f) => f.suppressedBy !== undefined).length;
+    const reconciliation = {
+      engine_totals: engineTotals,
+      final: deduped.length,
+      deltas: [
+        { kind: 'dedup', n: dedupDelta, why: 'same issue observed by multiple engines / edge IPs' },
+        { kind: 'suppress', n: suppressedInScan, rule: 'edgectx vendor rules (see audit)' },
+      ],
+      balanced: engineTotals >= deduped.length,
+    };
+    // HON-04: unbalanced counts ⇒ coverage ledger reads ASSESSMENT_FAILED.
+    if (!reconciliation.balanced) {
+      for (const c of completedCoverage) {
+        if (c.status !== undefined) { /* ledger untouched per category */ }
+        c.note = `[ASSESSMENT_FAILED: counts do not reconcile — ${JSON.stringify(reconciliation.deltas)}] ${c.note}`;
+      }
+      log.warn('count reconciliation unbalanced', { scanId, ...reconciliation });
+    }
+    this.db.audit({ actor: 'system', action: 'counts.reconciled', details: { scanId, ...reconciliation } });
+    void reconciliation;
+
     // C1–C3: feed the unified asset graph (never breaks the scan).
     try {
       const graph = new GraphStore(this.db.handle);

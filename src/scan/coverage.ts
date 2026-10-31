@@ -170,15 +170,18 @@ interface EngineStatusById {
   unavailable: Set<string>;
   failed: Set<string>;
   skipped: Set<string>;
+  /** HON-01/02 (edgetask.md): canonical outcome per engine, when recorded. */
+  outcomeByEngine: Map<string, NonNullable<EngineRunRecord['outcome']>>;
 }
 
 function engineStatusIndex(records: EngineRunRecord[]): EngineStatusById {
-  const idx: EngineStatusById = { ran: new Set(), unavailable: new Set(), failed: new Set(), skipped: new Set() };
+  const idx: EngineStatusById = { ran: new Set(), unavailable: new Set(), failed: new Set(), skipped: new Set(), outcomeByEngine: new Map() };
   for (const r of records) {
     if (r.status === 'ran') idx.ran.add(r.engine);
     else if (r.status === 'unavailable') idx.unavailable.add(r.engine);
     else if (r.status === 'failed') idx.failed.add(r.engine);
     else if (r.status === 'skipped') idx.skipped.add(r.engine);
+    if (r.outcome !== undefined) idx.outcomeByEngine.set(r.engine, r.outcome);
   }
   return idx;
 }
@@ -198,7 +201,18 @@ function taskStatus(
   if (engines.unavailable.has(task.engine) && !engines.ran.has(task.engine)) {
     return { status: 'ENGINE_UNAVAILABLE', matchedFindings: 0, detail: 'implementing engine not installed' };
   }
+  // HON-01/HON-02 (edgetask.md): canonical outcomes flow into the ledger.
+  const outcome = engines.outcomeByEngine.get(task.engine);
+  if (engines.ran.has(task.engine) && outcome === 'NOT_EXECUTED_DEGRADED') {
+    return { status: 'NOT_EXECUTED_DEGRADED', matchedFindings: 0, detail: 'engine degraded (dependency failure) — never clean (§1.4)' };
+  }
+  if (engines.ran.has(task.engine) && outcome === 'NO_OP_SUSPECT') {
+    return { status: 'NO_OP_SUSPECT', matchedFindings: 0, detail: 'ran with 0 inputs or <5 ms — suspect no-op (§3)' };
+  }
   if (!engines.ran.has(task.engine)) {
+    if (outcome === 'NOT_EXECUTED_DEGRADED') {
+      return { status: 'NOT_EXECUTED_DEGRADED', matchedFindings: 0, detail: 'engine degraded before execution (§1.4)' };
+    }
     return { status: 'NOT_EXECUTED', matchedFindings: 0, detail: scanCancelled ? 'scan cancelled before engine ran' : 'engine not part of this scan' };
   }
   // Engine ran — attribute findings to this task by rawId pattern (if declared) or engine match.
@@ -219,9 +233,14 @@ function aggregate(tasks: Array<{ status: TaskStatus }>): CategoryCoverageStatus
   const errored = tasks.filter((t) => t.status === 'ERROR').length;
   const manual = tasks.filter((t) => t.status === 'MANUAL_REVIEW_REQUIRED').length;
   const notExecuted = tasks.filter((t) => t.status === 'NOT_EXECUTED' || t.status === 'ENGINE_UNAVAILABLE' || t.status === 'INCONCLUSIVE').length;
+  const degraded = tasks.filter((t) => t.status === 'NOT_EXECUTED_DEGRADED').length;
+  const suspect = tasks.filter((t) => t.status === 'NO_OP_SUSPECT').length;
   if (executed > 0 && executed === tasks.length) return 'COVERED_WITH_EVIDENCE';
   if (executed > 0) return 'PARTIALLY_COVERED';
   if (errored > 0 && executed === 0) return 'ASSESSMENT_FAILED';
+  // HON-01/02: degradation and no-op runs are first-class ledger states — never clean.
+  if (degraded > 0) return 'NOT_EXECUTED_DEGRADED';
+  if (suspect > 0) return 'NO_OP_SUSPECT';
   if (manual > 0) return 'MANUAL_REVIEW_REQUIRED';
   if (notExecuted > 0) return 'MANUAL_REVIEW_REQUIRED';
   return 'NOT_ASSESSED';

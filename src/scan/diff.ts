@@ -14,6 +14,8 @@ export interface ScanDiff {
   removed: Finding[];
   /** Findings present in both (persistent — the remediation backlog). */
   unchanged: Finding[];
+  /** PLT-06 (edgetask.md): findings reclassified/downgraded by suppression rules. */
+  suppressed: Finding[];
 }
 
 export function diffScanFindings(from: Finding[], to: Finding[], fromScanId: string, toScanId: string): ScanDiff {
@@ -25,5 +27,6 @@ export function diffScanFindings(from: Finding[], to: Finding[], fromScanId: str
     added: to.filter((f) => !fromFps.has(f.fingerprint)),
     removed: from.filter((f) => !toFps.has(f.fingerprint)),
     unchanged: to.filter((f) => fromFps.has(f.fingerprint)),
+    suppressed: to.filter((f) => f.suppressedBy !== undefined),
   };
 }

@@ -104,12 +104,16 @@ export class HttpObservationEngine implements Engine {
       if (!(lower in page.headers)) missing.push(canonical);
     }
     if (missing.length === 0) return [];
+    // EDGE-06 (edgetask.md): a static/form-less/unauthenticated page caps the
+    // header finding at Low — the interactive-attack surface it protects is absent.
+    const formless = (ctx.crawl?.pages ?? []).every((p) => p.forms.length === 0);
+    const severity = !publicHost ? 'medium' : formless ? 'low' : 'high';
     return [{
       rawId: 'missing-security-headers',
       title: `Missing security headers: ${missing.join(', ')}`,
       category: 'A02',
       cwe: 693,
-      severity: publicHost ? 'high' : 'medium',
+      severity,
       confidence: 'high',
       status: 'confirmed',
       asset: ctx.target.origin,

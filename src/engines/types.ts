@@ -81,6 +81,8 @@ export interface EngineRunResult {
   detail?: string | undefined;
   /** Set when the engine could not execute its checks at all (e.g. no credentials). */
   notExecutedReason?: string | undefined;
+  /** HON-01 (edgetask.md): a dependency failed — dependants are NOT_EXECUTED_DEGRADED, never clean. */
+  degraded?: boolean | undefined;
 }
 
 /** Convenience builder for capability maps. */

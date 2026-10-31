@@ -23,7 +23,7 @@ function fakeScan(): Scan {
     ],
     stats: {
       findingsBySeverity: { critical: 0, high: 1, medium: 1, low: 0, info: 0 },
-      findingsByStatus: { confirmed: 2, probable: 0, informational: 0, false_positive: 0, untested: 0 , rejected_by_verification: 0, exploited: 0, fixed: 0 },
+      findingsByStatus: { confirmed: 2, probable: 0, informational: 0, false_positive: 0, untested: 0 , rejected_by_verification: 0, exploited: 0, fixed: 0 , candidate: 0 },
       totalFindings: 2, requestsSent: 42, requestsBlocked: 3,
     },
   };

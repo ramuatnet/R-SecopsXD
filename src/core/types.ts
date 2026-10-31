@@ -24,7 +24,7 @@ export type Confidence = 'high' | 'medium' | 'low';
  * - untested: check not executed for this target/mode
  */
 export type ValidationStatus =
-  | 'confirmed' | 'probable' | 'informational' | 'false_positive' | 'rejected_by_verification' | 'untested' | 'exploited' | 'fixed';
+  | 'confirmed' | 'candidate' | 'probable' | 'informational' | 'false_positive' | 'rejected_by_verification' | 'untested' | 'exploited' | 'fixed';
 
 export type ScanMode = 'passive' | 'active';
 
@@ -179,11 +179,17 @@ export interface Finding {
   retest?: RetestResult | undefined;
   /** E6: human escalation — excluded from auto-close on retest. */
   escalate?: EscalationInfo | undefined;
+  /** EDGE-03 (edgetask.md): surface ∈ {edge, origin, unknown} — edge observations never become origin findings. */
+  surface?: 'edge' | 'origin' | 'unknown' | undefined;
+  /** EDGE-05: suppression metadata — rule id, preserved for the rescan diff. */
+  suppressedBy?: string | undefined;
 }
 
 export type EngineStatus = 'ran' | 'unavailable' | 'failed' | 'skipped' | 'cancelled';
 
 export interface EngineRunRecord {
+  /** HON-01/HON-02: canonical probe outcome (edgetask.md §3). */
+  outcome?: 'RAN_FINDINGS' | 'RAN_CLEAN' | 'SKIPPED_NOT_APPLICABLE' | 'SKIPPED_NO_CREDENTIALS' | 'NOT_EXECUTED_DEGRADED' | 'NO_OP_SUSPECT' | 'FAILED';
   engine: string;
   status: EngineStatus;
   findingCount: number;
@@ -199,6 +205,8 @@ export type CategoryCoverage = 'covered' | 'partial' | 'manual-only';
 export type CategoryCoverageStatus =
   | 'COVERED_WITH_EVIDENCE'
   | 'RAN_CLEAN'
+  | 'NOT_EXECUTED_DEGRADED'
+  | 'NO_OP_SUSPECT'
   | 'PARTIALLY_COVERED'
   | 'MANUAL_REVIEW_REQUIRED'
   | 'NOT_ASSESSED'

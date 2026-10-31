@@ -32,6 +32,12 @@ async function reachable(url: string, timeoutMs = 2000): Promise<boolean> {
 }
 
 const kafkaUp = await reachable(`${KAFKA}/topics`);
+const sshdUp = existsSync(SSH_KEY) && await new Promise<boolean>((resolve) => {
+  const s = net.connect({ host: '127.0.0.1', port: SSH_PORT });
+  s.once('connect', () => { s.destroy(); resolve(true); });
+  s.once('error', () => resolve(false));
+  s.setTimeout(2000, () => { s.destroy(); resolve(false); });
+});
 const pgUp = await new Promise<boolean>((resolve) => {
   const s = net.connect({ host: '127.0.0.1', port: PG_PORT });
   s.once('connect', () => { s.destroy(); resolve(true); });
@@ -54,7 +60,7 @@ test('D1 PoC: envelope round-trips through the real Kafka-compatible broker', { 
   assert.ok(got.some((g) => g.marker === marker), 'produced envelope consumed back from the broker');
 });
 
-test('E4 PoC: credentialed SSH sensor inventories a live host (read-only allowlist)', { skip: !existsSync(SSH_KEY) && 'PoC SSH key or sshd container not present' }, async () => {
+test('E4 PoC: credentialed SSH sensor inventories a live host (read-only allowlist)', { skip: !sshdUp && 'rsec-sshd not reachable on :2224' }, async () => {
   const db = new Database(mkdtempSync(join(tmpdir(), 'poc-ssh-')));
   const store = new GraphStore(db.handle);
   const sensor = new CredentialedSshSensor();

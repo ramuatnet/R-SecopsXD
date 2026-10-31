@@ -419,6 +419,8 @@ export class AssetDiscoveryEngine implements Engine {
     }
 
     const summary = `${findings.length} finding(s); ${notes.length > 0 ? `notes: ${notes.join('; ')}` : 'all sources answered'}`;
-    return { findings, version: 'builtin', detail: summary };
+    // HON-01 (edgetask.md §1.4): resolver/CT/whois failure ⇒ engine.degraded —
+    // dependants see NOT_EXECUTED_DEGRADED, never clean.
+    return { findings, version: 'builtin', detail: summary, degraded: notes.length > 0 };
   }
 }

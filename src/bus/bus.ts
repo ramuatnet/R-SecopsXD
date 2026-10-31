@@ -14,6 +14,11 @@ export const TOPICS = [
   'finding.normalized',// merged findings
   'risk.changed',      // recomputed risk for an asset
   'approval.gate',     // scope expansion requests awaiting operator approval
+  // edgetask.md §2 canonical edge topics (PLT-01):
+  'asset.discovered', 'service.observed', 'edge.classified', 'origin.candidate',
+  'origin.verified', 'fingerprint.resolved', 'probe.requested', 'probe.completed',
+  'finding.candidate', 'finding.validated', 'finding.suppressed', 'engine.degraded',
+  'governor.signal',
 ] as const;
 export type Topic = (typeof TOPICS)[number];
 
