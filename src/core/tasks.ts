@@ -143,6 +143,15 @@ export const TASKS: AssessmentTask[] = [
     refs: ['https://owasp.org/www-project-api-security/'],
     evidenceExpectation: 'Playground HTML evidence',
   },
+  {
+    id: 'A02-T09', category: 'A02', engine: 'builtin.host-infra', mode: 'active',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'Management interface exposure on non-standard ports',
+    description: 'During infrastructure port scan of the target\u2019s resolved IPs, flags HTTP services on ports commonly used for admin consoles (8080/8443). Probable — needs human confirmation of the interface type.',
+    rawIdPattern: 'management-interface-exposed',
+    refs: ['https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README'],
+    evidenceExpectation: 'TCP/TLS probe evidence for the flagged port',
+  },
 
   {
     id: 'A01-T11', category: 'A01', engine: 'builtin.authenticated-probe', mode: 'active',
@@ -161,6 +170,15 @@ export const TASKS: AssessmentTask[] = [
     rawIdPattern: 'undocumented-endpoints-discovered',
     refs: ['https://owasp.org/www-project-api-security/'],
     evidenceExpectation: 'Bundle evidence with extracted endpoint list',
+  },
+  {
+    id: 'A01-T13', category: 'A01', engine: 'builtin.host-infra', mode: 'active',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'External infrastructure reconnaissance (DNS \u2192 IP \u2192 ports \u2192 services)',
+    description: 'Resolves the registered hostname and maps live IPs, open TCP/TLS ports and service banners on the target\u2019s own infrastructure. Scope is anchored to the target\u2019s DNS records — no other hosts are scanned.',
+    rawIdPattern: 'host-discovered',
+    refs: [W('01-Information_Gathering/README')],
+    evidenceExpectation: 'DNS records + per-port probe evidence',
   },
   {
     id: 'A01-T10', category: 'A01', engine: 'builtin.http-observation', mode: 'passive',
@@ -290,6 +308,15 @@ export const TASKS: AssessmentTask[] = [
     rawIdPattern: 'js-library-known-vulnerability',
     refs: ['https://owasp.org/Top10/2025/en/A03_2025-Software_Supply_Chain_Failures/'],
     evidenceExpectation: 'Script URL with parsed version',
+  },
+  {
+    id: 'A03-T08', category: 'A03', engine: 'builtin.host-infra', mode: 'active',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'Infrastructure service version → CVE matching',
+    description: 'Matches banner-disclosed service versions on the target\u2019s resolved IPs against the curated offline advisory list (Apache, OpenSSH, ProFTPD). Backported banners can mislead — probable confidence.',
+    rawIdPattern: 'service-cve',
+    refs: ['https://owasp.org/Top10/2025/en/A03_2025-Software_Supply_Chain_Failures/'],
+    evidenceExpectation: 'Banner + version comparison evidence',
   },
   // ---------- A04 Cryptographic Failures ----------
   {

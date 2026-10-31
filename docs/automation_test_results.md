@@ -107,3 +107,16 @@ No category regressed to a higher claim (enforced by the no-inflation test).
 - T10.1/T10.2 repository.ts: ScanRepository interface + RBAC role definitions (viewer/scanner/approver/admin)
 - T9.3 SSE trace endpoint (GET /api/scans/:id/trace — streams engine status until completion)
 - Suite: **180/180**
+
+## Context-based infrastructure recon (2026-10-30, latest)
+
+- New engine `builtin.host-infra` (HostInfraEngine): registering a web URL is now enough —
+  the scan resolves the hostname (DNS lookup + CNAME + PTR), then in active mode port-scans
+  the resolved IPs (max 4, IPv4 first), TLS-probes 443/8443 (cert CN/issuer/SANs/protocol),
+  fingerprints services, matches versions against the offline CVE list, and derives banner-based
+  OS hints (low confidence; unknown stays unknown). Edge-proxy (CDN) fronting detected and reported.
+- Passive scans get DNS-only resolution (host-resolved finding, no packets to the host).
+- Scope anchoring: only IPs the registered hostname resolves to are scanned — no separate CIDR
+  target registration needed for external infrastructure recon.
+- Wired into `standard-active` + `external-dast` profiles (linear path) and seeded in loopRunner
+  (loop path, never breaks the scan). Tasks A01-T13, A02-T09, A03-T08 added; coverage v1 map updated.

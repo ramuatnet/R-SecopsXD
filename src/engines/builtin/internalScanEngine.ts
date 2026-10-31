@@ -29,7 +29,7 @@ const INFO: EngineInfo = {
 
 // ---------- A4: protocol-aware service fingerprinting ----------
 
-interface ServiceFingerprint {
+export interface ServiceFingerprint {
   service: string;
   version?: string;
   product?: string;
@@ -119,7 +119,7 @@ function versionLt(a: string, b: string): boolean {
   return false;
 }
 
-function matchServiceCves(fp: ServiceFingerprint): ServiceCve[] {
+export function matchServiceCves(fp: ServiceFingerprint): ServiceCve[] {
   if (!fp.version) return [];
   return SERVICE_CVES.filter(
     (c) => c.service === fp.service && versionLt(fp.version!, c.versionBelow),

@@ -26,6 +26,7 @@ import { Semaphore } from '../safety/concurrency.ts';
 import { ScopedHttpClient, type RequestStats } from '../scan/httpClient.ts';
 import { dedupeFindings } from '../core/ids.ts';
 import { computeCoverage } from './coverage.ts';
+import { normalizeFinding } from './normalize.ts';
 import { CrawlerLiteEngine } from '../engines/builtin/crawlerLite.ts';
 import { log } from '../logging.ts';
 import { ALL_CATEGORIES } from '../core/owasp.ts';
@@ -81,6 +82,43 @@ export async function runLoopScan(
   };
   await crawler.run(crawlCtx as never);
 
+  // Context-based infrastructure recon (T: host-infra): resolve the target
+  // hostname and, in active mode, port-scan the resolved IPs. Runs before the
+  // loop so findings join the loop result. Never breaks the scan (I11 spirit).
+  const infraStart = Date.now();
+  let infraFindings: Finding[] = [];
+  let infraRecord: EngineRunRecord = {
+    engine: 'builtin.host-infra', status: 'skipped', findingCount: 0,
+    durationMs: 0, detail: 'not run',
+  };
+  try {
+    const { HostInfraEngine } = await import('../engines/builtin/hostInfra.ts');
+    const infra = new HostInfraEngine();
+    const infraResult = await infra.run({
+      scanId, target, mode, client, guard, stats, signal, workDir,
+      log: (m: string, f?: Record<string, unknown>) => log.debug(m, f),
+    } as never);
+    infraFindings = infraResult.findings.map((raw) => normalizeFinding(raw, {
+      target,
+      engineId: 'builtin.host-infra',
+      engineVersion: 'builtin',
+      adapter: false,
+      triages: db.getTriages(),
+    }));
+    infraRecord = {
+      engine: 'builtin.host-infra', status: 'ran',
+      findingCount: infraResult.findings.length,
+      durationMs: Date.now() - infraStart,
+      detail: infraResult.detail, version: 'builtin',
+    };
+  } catch (e) {
+    infraRecord = {
+      engine: 'builtin.host-infra', status: 'failed', findingCount: 0,
+      durationMs: Date.now() - infraStart,
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+
   // Probe gate: populate the model before the loop starts
   const model = new TargetModel(db.handle, target.id);
   await runProbeGate(model, {
@@ -105,6 +143,7 @@ export async function runLoopScan(
   };
 
   const result: LoopResult = await runLoopFn(loopCtx, budget);
+  result.findings.push(...infraFindings);
 
   // Persist trace entries (T-W4)
   for (const entry of result.trace) {
@@ -118,13 +157,16 @@ export async function runLoopScan(
   }
 
   // Map loop findings to engine records
-  const engineRecords: EngineRunRecord[] = result.trace.map((t) => ({
-    engine: t.actionId ?? `iteration-${t.iteration}`,
-    status: 'ran' as const,
-    findingCount: t.findingCount,
-    durationMs: 0,
-    detail: t.outcome,
-  }));
+  const engineRecords: EngineRunRecord[] = [
+    infraRecord,
+    ...result.trace.map((t) => ({
+      engine: t.actionId ?? `iteration-${t.iteration}`,
+      status: 'ran' as const,
+      findingCount: t.findingCount,
+      durationMs: 0,
+      detail: t.outcome,
+    })),
+  ];
 
   // Dedupe and persist
   const deduped = dedupeFindings(result.findings);

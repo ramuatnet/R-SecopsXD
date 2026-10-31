@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { expandCidr } from '../../src/engines/builtin/internalScan.ts';
 import { InternalScanEngine, fingerprint } from '../../src/engines/builtin/internalScanEngine.ts';
+import { HostInfraEngine } from '../../src/engines/builtin/hostInfra.ts';
 import { certMatchesHost } from '../../src/engines/builtin/tlsAnalysis.ts';
 import { computePrecisionRecall } from '../../src/verify/metrics.ts';
 import type { ScanContext } from '../../src/engines/types.ts';
@@ -136,4 +137,70 @@ test('precision/recall metrics: correct computation', () => {
   assert.ok(Math.abs(pr.precision - 2 / 3) < 1e-9);
   assert.ok(Math.abs(pr.recall - 2 / 3) < 1e-9);
   assert.ok(pr.f1 > 0);
+});
+
+// ---------- host-infra: context-based infrastructure recon ----------
+
+function makeInfraCtx(mode: 'active' | 'passive', origin: string): ScanContext {
+  const target: Target = { id: 't', name: 'x', origin, kind: 'webapp', approved: true, createdAt: new Date().toISOString() };
+  return {
+    scanId: 's', target, mode,
+    client: {} as never, guard: {} as never, stats: { sent: 0, blocked: 0 },
+    signal: new AbortController().signal, workDir: '.', log: () => {},
+  };
+}
+
+test('host-infra: webapp target resolves hostname and port-scans resolved IPs (active)', async () => {
+  const server = createHttpServer((_req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/html', server: 'TestServer/1.0' });
+    res.end('<h1>test</h1>');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const engine = new HostInfraEngine();
+    const res = await engine.run(makeInfraCtx('active', `http://localhost:${port}`));
+    const resolved = res.findings.filter((f: { rawId?: string }) => f.rawId === 'host-resolved');
+    assert.equal(resolved.length, 1, 'host-resolved finding emitted');
+    const hosts = res.findings.filter((f: { rawId?: string }) => f.rawId === 'host-discovered');
+    assert.ok(hosts.some((f: { title?: string }) => f.title?.includes(String(port))), 'open target port reported');
+    const svc = res.findings.filter((f: { rawId?: string }) => f.rawId === 'service-version-disclosed');
+    assert.ok(svc.length > 0, 'service version disclosed');
+  } finally {
+    server.close();
+  }
+});
+
+test('host-infra: passive mode resolves DNS but sends no port probes', async () => {
+  const engine = new HostInfraEngine();
+  const res = await engine.run(makeInfraCtx('passive', 'http://localhost:1'));
+  assert.ok(res.findings.some((f: { rawId?: string }) => f.rawId === 'host-resolved'), 'DNS resolution present');
+  assert.ok(!res.findings.some((f: { rawId?: string }) => f.rawId === 'host-discovered'), 'no port-scan findings in passive mode');
+  assert.match(res.detail ?? '', /passive mode/);
+});
+
+test('host-infra: unresolvable hostname yields no findings (unknown, not assumed)', async () => {
+  const engine = new HostInfraEngine();
+  const res = await engine.run(makeInfraCtx('active', 'http://definitely-not-a-real-host-abcxyz.invalid:80'));
+  assert.equal(res.findings.length, 0, 'no findings for unresolvable hostname');
+  assert.match(res.detail ?? '', /could not be resolved/);
+});
+
+test('host-infra: IP-literal origin skips DNS and scans directly', async () => {
+  const server = createHttpServer((_req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+    res.writeHead(200, { server: 'TestServer/2.0' });
+    res.end('ok');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const engine = new HostInfraEngine();
+    const res = await engine.run(makeInfraCtx('active', `http://127.0.0.1:${port}`));
+    const resolved = res.findings.find((f: { rawId?: string }) => f.rawId === 'host-resolved');
+    assert.ok(resolved, 'host-resolved emitted for IP literal');
+    assert.equal(resolved!.locator, '127.0.0.1', 'locator is the IP itself');
+    assert.ok(res.findings.some((f: { rawId?: string; title?: string }) => f.rawId === 'host-discovered' && f.title?.includes(String(port))), 'target port found');
+  } finally {
+    server.close();
+  }
 });

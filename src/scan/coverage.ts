@@ -123,6 +123,12 @@ function capabilitiesFor(engineId: string): Partial<Record<OwaspCategory, { note
         A08: { note: 'CSRF/integrity alerts', strength: 'heuristic' },
         A10: { note: 'info disclosure alerts', strength: 'heuristic' },
       };
+    case 'builtin.host-infra':
+      return {
+        A01: { note: 'DNS resolution + open-port mapping of the registered target\u2019s infrastructure', strength: 'strong' },
+        A02: { note: 'management interface exposure on non-standard ports', strength: 'strong' },
+        A03: { note: 'infrastructure service version → CVE matching (offline advisories)', strength: 'strong' },
+      };
     default:
       return {};
   }
