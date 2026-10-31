@@ -19,6 +19,7 @@ import { buildDeliverableReport } from '../reports/deliverable.ts';
 import { RetestService } from '../retest/retest.ts';
 import type { Engagement, ExploitClass } from '../core/types.ts';
 import { randomUUID } from 'node:crypto';
+import type { ScopeManifest } from '../edgectx/models.ts';
 import { GraphStore } from '../graph/graph.ts';
 import { assetUid } from '../graph/uid.ts';
 import { scoreAgainstTruth, type ScanQuality } from '../verify/metrics.ts';
@@ -528,6 +529,52 @@ export const escalateFinding = (app: App): Handler => withAuth(app.db.verifyToke
   const escalate = { reason: reason as string, context: asString(body.context) ?? '', at: new Date().toISOString(), by: 'operator' };
   app.db.setFindingEnrichment(scanId, findingId, { escalate });
   return jsonResponse({ escalated: true, findingId, escalate });
+});
+
+export const createManifest = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const body = await readJsonBody(ctx.req) as Record<string, unknown>;
+  const signer = asString(body.signer);
+  const domains = Array.isArray(body.domains) ? body.domains.map(String) : undefined;
+  if (signer === undefined || domains === undefined || domains.length === 0) {
+    bad(400, 'manifest_fields', 'signer and non-empty domains are required');
+  }
+  const ports = (body.ports ?? {}) as { include?: unknown; exclude?: unknown };
+  const manifest: ScopeManifest = {
+    manifestId: `mf_${randomUUID().slice(0, 13)}`,
+    signer: signer as string,
+    validFrom: asString(body.validFrom) ?? new Date().toISOString(),
+    validTo: asString(body.validTo) ?? new Date(Date.now() + 7 * 86400_000).toISOString(),
+    domains: domains as string[],
+    cidrs: Array.isArray(body.cidrs) ? body.cidrs.map(String) : [],
+    ports: {
+      include: Array.isArray(ports.include) ? ports.include.map(Number) : [],
+      exclude: Array.isArray(ports.exclude) ? ports.exclude.map(Number) : [],
+    },
+    classes: Array.isArray(body.classes) ? (body.classes as unknown[]).map(String).filter((c): c is ExploitClass => ['sqli', 'ssrf', 'traversal', 'idor', 'xss-reflection', 'open-redirect'].includes(String(c))) : [],
+    flags: {
+      originDiscoveryAuthorized: body.flags !== undefined && (body.flags as { originDiscoveryAuthorized?: boolean }).originDiscoveryAuthorized === true,
+      directOriginProbingAuthorized: body.flags !== undefined && (body.flags as { directOriginProbingAuthorized?: boolean }).directOriginProbingAuthorized === true,
+    },
+    killSwitch: (asString(body.killSwitch) === 'per-engagement' ? 'per-engagement' : asString(body.killSwitch) === 'none' ? 'none' : 'global') as ScopeManifest['killSwitch'],
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+  const created = app.db.createManifest(manifest);
+  return jsonResponse({ manifest: created }, 201);
+});
+
+export const listManifests = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async () => {
+  const active = app.db.getActiveManifest();
+  return jsonResponse({ active: active ?? null, note: active !== undefined ? undefined : 'no valid manifest — bus ingress unrestricted, RoE still applies downstream' });
+});
+
+export const listOriginCandidates = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async () => {
+  return jsonResponse({ candidates: app.db.getOriginCandidates() });
+});
+
+export const approveOriginCandidate = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  app.db.approveOriginCandidate(ctx.params.id as string, 'operator');
+  return jsonResponse({ approved: true, candidateId: ctx.params.id });
 });
 
 export const listEscalations = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async () => {

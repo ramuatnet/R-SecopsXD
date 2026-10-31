@@ -36,12 +36,36 @@ export interface Bus {
   subscribe<T>(topic: Topic, handler: Handler<T>): () => void;
 }
 
+export interface BusIngressGate {
+  /** §1.1: admission check — returns blocked_by_scope reason when rejected. */
+  admit(topic: Topic, key: string): { allowed: boolean; reason?: string };
+}
+
 export class InProcessBus implements Bus {
   private readonly handlers = new Map<Topic, Set<Handler<never>>>();
   private readonly log: Array<Envelope<unknown>> = [];
   private readonly maxLog = 1000;
+  private readonly gate: BusIngressGate | undefined;
+  private readonly rejected: Array<{ topic: Topic; key: string; reason: string }> = [];
+
+  constructor(gate?: BusIngressGate) {
+    this.gate = gate;
+  }
+
+  /** §1.1: out-of-scope events rejected at ingress with blocked_by_scope. */
+  rejectedEvents(): Array<{ topic: Topic; key: string; reason: string }> {
+    return [...this.rejected];
+  }
 
   publish<T>(topic: Topic, key: string, payload: T): Envelope<T> {
+    if (this.gate !== undefined) {
+      const verdict = this.gate.admit(topic, key);
+      if (!verdict.allowed) {
+        this.rejected.push({ topic, key, reason: verdict.reason ?? 'blocked_by_scope' });
+        // Rejections are recorded, never delivered to subscribers.
+        return { topic, key, payload, emittedAt: new Date().toISOString() };
+      }
+    }
     const envelope: Envelope<T> = { topic, key, payload, emittedAt: new Date().toISOString() };
     this.log.push(envelope as Envelope<unknown>);
     if (this.log.length > this.maxLog) this.log.shift();

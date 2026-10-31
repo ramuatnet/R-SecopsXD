@@ -13,6 +13,8 @@ import { ScopeGate } from './safety/scopeGate.ts';
 import { SafetyGovernor } from './safety/governor.ts';
 import { ScanRequestDispatcher } from './orchestration/dispatcher.ts';
 import { RetestService } from './retest/retest.ts';
+import { ManifestIngressGate } from './edgectx/ingress.ts';
+import type { ScopeManifestView } from './edgectx/manifest.ts';
 import { Router, errorResponse, jsonResponse, ApiError, type Handler, type RequestContext } from './api/router.ts';
 import { withAuth } from './api/auth.ts';
 import * as h from './api/handlers.ts';
@@ -60,7 +62,8 @@ export function buildPlatform(config = loadConfig()): Platform {
   const registry = new EngineRegistry(config);
   // D1/D3/D4/D5: process-wide orchestration fabric — bus, scope approvals,
   // safety governor, and the scan-request dispatcher closing the loop.
-  const bus = new InProcessBus();
+  const manifestView = (): ScopeManifestView | undefined => db.getActiveManifest();
+  const bus = new InProcessBus(new ManifestIngressGate(manifestView));
   const scopeGate = new ScopeGate();
   for (const t of db.listTargets()) {
     if (t.kind === 'webapp' && t.origin !== '') scopeGate.register('origin', t.origin, t.approved);
@@ -109,6 +112,10 @@ export function buildPlatform(config = loadConfig()): Platform {
   router.post('/api/scans/:scanId/findings/:findingId/status', authed(h.triageFinding(app)));
   router.get('/api/scans/:id/report', authed(h.getReport(app)));
   router.post('/api/engagements', authed(h.createEngagement(app)));
+  router.post('/api/manifests', authed(h.createManifest(app)));
+  router.get('/api/manifests', authed(h.listManifests(app)));
+  router.get('/api/origin-candidates', authed(h.listOriginCandidates(app)));
+  router.post('/api/origin-candidates/:id/approve', authed(h.approveOriginCandidate(app)));
   router.get('/api/engagements/:id', authed(h.getEngagement(app)));
   router.post('/api/engagements/:id/stop', authed(h.stopEngagement(app)));
   router.post('/api/targets/:id/retest', authed(h.retestTarget(app)));

@@ -21,6 +21,10 @@ import { fingerprint, matchServiceCves, type ServiceFingerprint } from './intern
 import type { Engine, EngineAvailability, EngineRunResult, ScanContext } from '../types.ts';
 import { cap } from '../types.ts';
 import type { EngineInfo, Evidence, RawFinding } from '../../core/types.ts';
+import type { ScopeManifest } from '../../edgectx/models.ts';
+import { classifyFromResponse, type EdgeVerdict } from '../../edgectx/classifier.ts';
+import { applySharedIpGuard } from '../../edgectx/manifest.ts';
+import { VENDOR_PROXIED_PORTS } from '../../edgectx/suppress.ts';
 
 const INFO: EngineInfo = {
   id: 'builtin.host-infra',
@@ -443,15 +447,56 @@ export class HostInfraEngine implements Engine {
     }
 
     // ---- active: bounded port scan of resolved IPs ----
+    // EDGE-04 (edgetask.md §1.2): staged probing — the WEB_PORTS batch runs
+    // first and classifies each IP; an edge-classified IP continues ONLY with
+    // manifest-permitted ports (shared-IP guard, pre-probe enforcement).
+    const manifest = ctx.manifest;
     const ports = [...new Set([targetPort, ...WEB_PORTS, ...INFRA_PORTS])];
     interface OpenPort { port: number; banner?: string; recon?: HttpRecon; unverified?: boolean | undefined }
     const byIp = new Map<string, OpenPort[]>();
+    const edgeIps = new Set<string>();
 
     for (const ip of res.ips) {
       if (ctx.signal.aborted) break;
-      for (let i = 0; i < ports.length; i += PORT_BATCH) {
+      // Stage 1: classify from the web-port batch.
+      const classifyPorts = [targetPort, 80, 443].filter((p, i, a) => a.indexOf(p) === i);
+      for (const port of classifyPorts) {
         if (ctx.signal.aborted) break;
-        const batch = ports.slice(i, i + PORT_BATCH);
+        if (TLS_PORTS.has(port) || HTTP_PORTS.has(port) || port === targetPort) {
+          const recon = await httpRecon(ip, port, hostname, TLS_PORTS.has(port));
+          if (recon.open) {
+            const list = byIp.get(ip) ?? [];
+            const entry: OpenPort = { port, recon };
+            if (recon.unverified === true) entry.unverified = true;
+            list.push(entry);
+            byIp.set(ip, list);
+          }
+        } else {
+          const { open, banner } = await scanPort(ip, port, PROBE_TIMEOUT_MS);
+          if (open) {
+            const list = byIp.get(ip) ?? [];
+            const entry: OpenPort = { port };
+            if (banner !== undefined) entry.banner = banner;
+            list.push(entry);
+            byIp.set(ip, list);
+          }
+        }
+      }
+      // Classify: vendor headers or vendor IP ranges from stage-1 responses.
+      const firstRecon = (byIp.get(ip) ?? []).find((o) => o.recon !== undefined)?.recon;
+      const verdict: EdgeVerdict = firstRecon !== undefined && firstRecon.isHttp
+        ? classifyFromResponse(firstRecon.headers, ip, { feedVersion: 'edgectx-classifier-2026-10-31', stale: false })
+        : classifyFromResponse({}, ip, { feedVersion: 'edgectx-classifier-2026-10-31', stale: false });
+      const isEdge = verdict.vendor !== 'none';
+      if (isEdge) edgeIps.add(ip);
+      // EDGE-04: on an edge-classified IP, only manifest-permitted ports continue.
+      const guardedPorts = isEdge && manifest !== undefined
+        ? ports.filter((p) => !manifest.ports.exclude.includes(p) && (manifest.ports.include.length === 0 || manifest.ports.include.includes(p)))
+        : ports;
+      const remaining = guardedPorts.filter((p) => !classifyPorts.includes(p));
+      for (let i = 0; i < remaining.length; i += PORT_BATCH) {
+        if (ctx.signal.aborted) break;
+        const batch = remaining.slice(i, i + PORT_BATCH);
         const results = await Promise.allSettled(batch.map(async (port) => {
           if (TLS_PORTS.has(port) || HTTP_PORTS.has(port) || port === targetPort) {
             // one connection: TLS handshake (if TLS) + GET / recon
@@ -596,6 +641,16 @@ export class HostInfraEngine implements Engine {
           references: [],
         });
 
+        // §9 (edgetask.md): high severity needs a second independent probe —
+        // re-probe HIGH_PORTS found open; a failed re-probe downgrades to candidate.
+        const portFindingIdx = findings.length - 1;
+        if (HIGH_PORTS.has(op.port) && op.recon === undefined) {
+          const confirm = await scanPort(ip, op.port, PROBE_TIMEOUT_MS);
+          if (!confirm.open) {
+            findings[portFindingIdx] = { ...findings[portFindingIdx]!, status: 'candidate', confidence: 'low' };
+            continue;
+          }
+        }
         const bannerStr = op.banner ?? '';
         const fp: ServiceFingerprint = op.recon !== undefined && op.recon.protocol !== undefined
           ? { service: 'https' }

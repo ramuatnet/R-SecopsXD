@@ -12,6 +12,7 @@
  *  - probe executor: the shared-IP guard filters non-manifest ports on edge IPs.
  */
 import type { ScopeManifest } from './models.ts';
+export type ScopeManifestView = ScopeManifest;
 import type { Finding } from '../core/types.ts';
 import { cidrContains } from './classifier.ts';
 

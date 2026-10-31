@@ -9,7 +9,9 @@ import {
   randomUUID, createHash, randomBytes, timingSafeEqual,
   createCipheriv, createDecipheriv, createHmac,
 } from 'node:crypto';
-import type { Engagement, 
+import { manifestValid } from '../edgectx/manifest.ts';
+import type { ScopeManifest } from '../edgectx/models.ts';
+import type { Engagement,
   AuditEntry, CoverageReport, EngineRunRecord, Finding, Scan, ScanStats, Target,
   ValidationStatus,
 } from '../core/types.ts';
@@ -243,6 +245,33 @@ const MIGRATIONS: string[] = [
     retest_json TEXT,
     escalate_json TEXT,
     PRIMARY KEY (scan_id, finding_id)
+  );
+  `,
+  // 009 (edgetask.md §1.1, ORIG): signed scope manifests + origin candidates.
+  `
+  CREATE TABLE IF NOT EXISTS scope_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    signer TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT NOT NULL,
+    domains_json TEXT NOT NULL DEFAULT '[]',
+    cidrs_json TEXT NOT NULL DEFAULT '[]',
+    ports_json TEXT NOT NULL DEFAULT '{}',
+    classes_json TEXT NOT NULL DEFAULT '[]',
+    flags_json TEXT NOT NULL DEFAULT '{}',
+    kill_switch TEXT NOT NULL DEFAULT 'none',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS origin_candidates (
+    id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    discovered_via TEXT NOT NULL,
+    approved INTEGER NOT NULL DEFAULT 0,
+    approved_by TEXT,
+    rejection_reason TEXT,
+    created_at TEXT NOT NULL
   );
   `,
 ];
@@ -617,6 +646,58 @@ export class Database {
     return this.getFindings(scanId).find((x) => x.id === findingId);
   }
 
+  // ---- scope manifests (edgetask.md §1.1) ----
+
+  createManifest(m: ScopeManifest): ScopeManifest {
+    const full: ScopeManifest = { ...m, active: true, createdAt: m.createdAt ?? new Date().toISOString() };
+    this.db.prepare(
+      `INSERT INTO scope_manifests (manifest_id, signer, valid_from, valid_to, domains_json, cidrs_json, ports_json, classes_json, flags_json, kill_switch, active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(full.manifestId, full.signer, full.validFrom, full.validTo, JSON.stringify(full.domains), JSON.stringify(full.cidrs),
+      JSON.stringify(full.ports), JSON.stringify(full.classes), JSON.stringify(full.flags), full.killSwitch, 1, full.createdAt);
+    this.audit({ actor: 'operator', action: 'manifest.created', details: { manifestId: full.manifestId, signer: full.signer } });
+    return full;
+  }
+
+  getActiveManifest(): ScopeManifest | undefined {
+    const rows = this.db.prepare('SELECT * FROM scope_manifests WHERE active = 1 ORDER BY created_at DESC').all() as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      const m = rowToManifest(r);
+      const check = manifestValid(m);
+      if (check.inScope) return m;
+    }
+    return undefined;
+  }
+
+  deactivateManifest(manifestId: string): void {
+    this.db.prepare('UPDATE scope_manifests SET active = 0 WHERE manifest_id = ?').run(manifestId);
+    this.audit({ actor: 'operator', action: 'manifest.deactivated', details: { manifestId } });
+  }
+
+  // ---- origin candidates (ORIG-01/03) ----
+
+  upsertOriginCandidate(c: { hostname: string; ip: string; discoveredVia: string }): void {
+    const id = `oc_${c.hostname}`;
+    this.db.prepare(
+      `INSERT INTO origin_candidates (id, hostname, ip, discovered_via, approved, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)
+       ON CONFLICT(id) DO NOTHING`,
+    ).run(id, c.hostname, c.ip, c.discoveredVia, new Date().toISOString());
+  }
+
+  getOriginCandidates(): Array<{ id: string; hostname: string; ip: string; discoveredVia: string; approved: boolean; approvedBy: string | null }> {
+    const rows = this.db.prepare('SELECT * FROM origin_candidates ORDER BY created_at DESC').all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as string, hostname: r.hostname as string, ip: r.ip as string,
+      discoveredVia: r.discovered_via as string, approved: r.approved === 1, approvedBy: (r.approved_by as string | null) ?? null,
+    }));
+  }
+
+  approveOriginCandidate(id: string, by: string): void {
+    this.db.prepare('UPDATE origin_candidates SET approved = 1, approved_by = ? WHERE id = ?').run(by, id);
+    this.audit({ actor: by, action: 'origin.approved', details: { candidateId: id } });
+  }
+
   /** E3 (newtasks.md): retest status update — deliberately NOT a triage override. */
   updateFindingStatus(scanId: string, findingId: string, status: ValidationStatus): void {
     this.db.prepare('UPDATE findings SET status = ? WHERE scan_id = ? AND id = ?').run(status, scanId, findingId);
@@ -705,6 +786,23 @@ function rowToFinding(r: Record<string, unknown>, enr?: Record<string, unknown>)
     if (enr.escalate_json !== null && enr.escalate_json !== undefined) base.escalate = JSON.parse(enr.escalate_json as string) as Finding['escalate'];
   }
   return base;
+}
+
+function rowToManifest(r: Record<string, unknown>): ScopeManifest {
+  return {
+    manifestId: r.manifest_id as string,
+    signer: r.signer as string,
+    validFrom: r.valid_from as string,
+    validTo: r.valid_to as string,
+    domains: JSON.parse(r.domains_json as string) as string[],
+    cidrs: JSON.parse(r.cidrs_json as string) as string[],
+    ports: JSON.parse(r.ports_json as string) as ScopeManifest['ports'],
+    classes: JSON.parse(r.classes_json as string) as ScopeManifest['classes'],
+    flags: JSON.parse(r.flags_json as string) as ScopeManifest['flags'],
+    killSwitch: r.kill_switch as ScopeManifest['killSwitch'],
+    active: r.active === 1,
+    createdAt: r.created_at as string,
+  };
 }
 
 function rowToEngagement(r: Record<string, unknown>): Engagement {

@@ -81,8 +81,17 @@ export class TokenBucket {
 
 export interface GovernorDecision { allowed: boolean; reason?: string; }
 
+export type GovernorMode = 'active' | 'passive' | 'discovery-only';
+
+export interface GovernorSignal {
+  kind: 'throttle' | 'waf-suspected' | 'profile-shift' | 'breaker-open';
+  detail: string;
+  at: string;
+}
+
 export class SafetyGovernor {
   private readonly globalBucket: TokenBucket;
+  private onSignal: ((s: GovernorSignal) => void) | undefined;
   private readonly perAsset = new Map<string, TokenBucket>();
   private readonly killedTargets = new Set<string>();
   private globalKill = false;
@@ -144,6 +153,7 @@ export class SafetyGovernor {
     if (status === 429 || status === 503) {
       this.assetBucket(assetKey).onThrottleSignal();
       this.globalBucket.onThrottleSignal();
+      this.emit('throttle', `${status} on ${assetKey} — rate halved (AIMD)`);
       return;
     }
     // latency p95-style breach (arbitrary 3s threshold) backs off without halving as hard
@@ -152,6 +162,31 @@ export class SafetyGovernor {
       return;
     }
     if (status < 400) this.assetBucket(assetKey).onSuccess();
+  }
+
+  /** §7: subscribe to governor.signal events (bus publisher wires this). */
+  setSignalHandler(fn: ((s: GovernorSignal) => void) | undefined): void {
+    this.onSignal = fn;
+  }
+
+  private emit(kind: GovernorSignal['kind'], detail: string): void {
+    try { this.onSignal?.({ kind, detail, at: new Date().toISOString() }); } catch { /* never crash the governor */ }
+  }
+
+  /** §7: WAF block-page structural check — never recorded as evidence. */
+  isWafBlockPage(body: string): boolean {
+    const markers = [/attention required/i, /access denied/i, /blocked/i, /captcha/i, /cloudflare/i, /request unsuccessful/i];
+    const hits = markers.filter((m) => m.test(body)).length;
+    // Structural similarity: short body + multiple block markers + no app forms
+    return hits >= 2 || (hits >= 1 && body.length < 2048 && !/<form/i.test(body));
+  }
+
+  /** §7: profile shift on sustained WAF/throttle signals — active → passive → discovery-only. */
+  shiftProfileDown(current: ScanProfile, wafHits: number): { mode: GovernorMode; signal: GovernorSignal } {
+    const mode: GovernorMode = wafHits >= 3 ? 'discovery-only' : 'passive';
+    const signal: GovernorSignal = { kind: 'profile-shift', detail: `profile shifted ${current} → ${mode} after ${wafHits} WAF/throttle signal(s)`, at: new Date().toISOString() };
+    this.emit(signal.kind, signal.detail);
+    return { mode, signal };
   }
 
   killSwitch(targetKey?: string): void {

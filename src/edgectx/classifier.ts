@@ -4,7 +4,7 @@
  * signal does. Stale vendor feed multiplies confidence by 0.7 and the caller
  * must emit engine.degraded (EDGE-02).
  */
-import type { EdgeVendor, EdgeVerdict, Signal, EdgeFeedMeta } from './models.ts';
+import type { EdgeVendor, EdgeVerdict, Signal, EdgeFeedMeta, Vantage } from './models.ts';
 export type { EdgeVerdict };
 
 export interface VendorPack {
@@ -162,6 +162,29 @@ export function classify(
 }
 
 /** Classify from a response header set + optional IP/cert text. */
+/**
+ * §5 fingerprint confidence model (edgetask.md):
+ * conf = 0.35·stack_consistency + 0.30·banner_specificity
+ *      + 0.20·vendor_corroboration − 0.40·edge_penalty
+ * Edge-derived OS hints cap at candidate (never confirmed).
+ */
+export function fingerprintConfidence(input: {
+  stackConsistency: number;    // 0..1 — TTL/window/options agreement
+  bannerSpecificity: number;   // 0..1 — how specific the banner is
+  vendorCorroboration: number; // 0..1 — vendor pack agreement
+  vantage: Vantage;
+}): { confidence: number; cap: 'confirmed' | 'candidate' } {
+  const edgePenalty = input.vantage === 'edge' ? 0.4 : 0;
+  const confidence = Math.max(0, Math.min(1,
+    0.35 * input.stackConsistency +
+    0.30 * input.bannerSpecificity +
+    0.20 * input.vendorCorroboration -
+    edgePenalty));
+  // Edge-derived OS hints cap at candidate — the CDN terminates TCP, so the
+  // stack features belong to the edge, not the origin.
+  return { confidence, cap: input.vantage === 'edge' ? 'candidate' : 'confirmed' };
+}
+
 export function classifyFromResponse(
   headers: Record<string, string>,
   ip: string | undefined,

@@ -144,6 +144,8 @@ const MANIFEST: ScopeManifest = {
   ports: { include: [80, 443, 8080, 8443], exclude: [22] },
   classes: ['sqli'], flags: { originDiscoveryAuthorized: false, directOriginProbingAuthorized: false },
   killSwitch: 'none',
+  active: true,
+  createdAt: new Date().toISOString(),
 };
 
 test('EDGE-04: manifest scope + port policy', () => {

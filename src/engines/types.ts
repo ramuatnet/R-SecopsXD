@@ -61,6 +61,8 @@ export interface ScanContext {
   crawl?: CrawlCorpus | undefined;
   /** A2: verified/probable findings from earlier stages — seeds for variant-hunter. */
   seedFindings?: import('../core/types.ts').Finding[] | undefined;
+  /** EDGE-04 (edgetask.md): signed scope manifest — shared-IP port policy for edge-classified IPs. */
+  manifest?: import('../edgectx/models.ts').ScopeManifest | undefined;
   log: (msg: string, fields?: Record<string, unknown>) => void;
 }
 

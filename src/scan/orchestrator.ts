@@ -80,6 +80,10 @@ export class Orchestrator {
     this.bus = deps.bus;
     this.scopeGate = deps.scopeGate;
     this.governor = deps.governor ?? new SafetyGovernor(config.scanProfile);
+    // §7 (edgetask.md): governor signals flow to the bus.
+    this.governor.setSignalHandler((sig) => {
+      try { this.bus?.publish('governor.signal', sig.kind, sig); } catch { /* never crash */ }
+    });
   }
 
   /** Per-scan governor binding (scanId-bound ceilings, assetKey per host). */
@@ -319,6 +323,7 @@ export class Orchestrator {
         stats,
         signal,
         workDir,
+        manifest: this.db.getActiveManifest(),
         crawl: crawlContext.corpus as never,
         log: (msg: string, fields?: Record<string, unknown>) => log.info(`[${step.id}] ${msg}`, { scanId, ...fields }),
       };
@@ -452,6 +457,16 @@ export class Orchestrator {
     // Dedupe across engines (merges provenance), then finalize.
     const deduped = dedupeFindings(findings);
 
+    // HON-01 (edgetask.md §1.4): degraded engines emit engine.degraded on the bus.
+    for (const r of engineRecords) {
+      if (r.outcome === 'NOT_EXECUTED_DEGRADED') {
+        this.bus?.publish('engine.degraded', r.engine, { scanId, engine: r.engine, detail: r.detail });
+      }
+      if (r.outcome === 'NO_OP_SUSPECT') {
+        this.bus?.publish('engine.degraded', r.engine, { scanId, engine: r.engine, suspect: true, detail: r.detail });
+      }
+    }
+
     // EDGE-05 (edgetask.md): suppression pass — vendor rules reclassify or
     // downgrade findings based on the edge verdict; audited, never silent.
     let suppressedCount = 0;
@@ -524,7 +539,8 @@ export class Orchestrator {
     // HON-04: unbalanced counts ⇒ coverage ledger reads ASSESSMENT_FAILED.
     if (!reconciliation.balanced) {
       for (const c of completedCoverage) {
-        if (c.status !== undefined) { /* ledger untouched per category */ }
+        c.status = 'ASSESSMENT_FAILED';
+        c.verdict = 'manual-only';
         c.note = `[ASSESSMENT_FAILED: counts do not reconcile — ${JSON.stringify(reconciliation.deltas)}] ${c.note}`;
       }
       log.warn('count reconciliation unbalanced', { scanId, ...reconciliation });

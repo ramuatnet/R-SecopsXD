@@ -44,6 +44,8 @@ export interface ScopeManifest {
   classes: ExploitClass[];
   flags: { originDiscoveryAuthorized: boolean; directOriginProbingAuthorized: boolean };
   killSwitch: 'global' | 'per-engagement' | 'none';
+  active: boolean;
+  createdAt: string;
 }
 
 /** §3 canonical probe outcome — every engine run maps onto exactly one. */
