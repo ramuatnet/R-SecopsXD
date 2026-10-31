@@ -201,13 +201,17 @@ $('#target-form')?.addEventListener('submit', async (e) => {
 
 // ---------- scans ----------
 
+let allTargets = [];
+
 async function loadTargetsIntoSelect() {
   const { targets } = await API.call('/api/targets');
+  allTargets = targets;
   const select = $('#scan-form [name=targetId]');
   select.textContent = '';
   for (const t of targets.filter((x) => x.approved)) {
     const opt = el('option', '', t.name);
     opt.value = t.id;
+    opt.dataset.kind = t.kind;
     select.append(opt);
   }
 }
@@ -215,13 +219,19 @@ async function loadTargetsIntoSelect() {
 async function loadProfiles() {
   const { profiles } = await API.call('/api/profiles');
   const select = $('#scan-form [name=profile]');
+  const targetSel = $('#scan-form [name=targetId]');
+  const targetKind = targetSel.selectedOptions[0]?.dataset.kind ?? 'webapp';
   select.textContent = '';
   for (const p of profiles) {
+    if (!p.targetKinds.includes(targetKind)) continue;
     const opt = el('option', '', p.name);
     opt.value = p.id;
     select.append(opt);
   }
+  select.dispatchEvent(new Event('change'));
 }
+
+$('#scan-form [name=targetId]')?.addEventListener('change', () => loadProfiles());
 
 $('#scan-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
