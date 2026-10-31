@@ -251,3 +251,88 @@ runner — it will fire on the next push.
 - Key finding IDs to know: `port-open`, `port-scan-interference`, `root-fetch-blocked`,
   `host-discovered`, `service-identified`, `os-hint`, `asset-ct-logs`, `zone-transfer-possible`,
   `variant-reflection`, `rsec-*` (nuclei templates).
+
+---
+
+## PoC evidence — remaining items implemented and proven (2026-10-31, this section)
+
+Each remaining item was attacked with the platform's existing patterns (external tooling via
+runProcess, Docker deployment, protocol emulation). All PoCs are **permanent, guarded tests**
+(`test/unit/poc-evidence.test.ts` + `test/unit/oob-loop.test.ts`): they run against the real
+infrastructure when present and skip honestly when it is absent — never a fake pass.
+Suite after PoCs: **258/258**.
+
+### D1 — real Kafka-compatible broker + `KafkaHttpBus` adapter ✅ PROVEN
+- Deployment: Redpanda container with PandaProxy enabled (`rsec-redpanda`, ports 9092/8082); the six
+  canonical topics created (`discovery.asset`, `scan.request`, `scan.result`, `finding.normalized`,
+  `risk.changed`, `approval.gate`).
+- Adapter: `src/bus/kafkaHttp.ts` — implements the platform `Bus` interface using **only `fetch`**
+  (zero-dependency ADR holds) over the Confluent REST Proxy v2 wire protocol (JSON v2 content
+  types, consumer groups with earliest reset, per-subscriber instances, best-effort cleanup).
+- Evidence: `broker topics: discovery.asset, scan.request, …` listed from the broker; envelope
+  published → `{"offsets":[{"partition":0,"offset":0}]}` → consumed back byte-identical:
+  `consumed via real broker: [{"findingId":"FND-A01-TEST","severity":"high"}]`. Permanent test green.
+- Issue found: the Redpanda container segfaulted (exit 139) in overprovisioned 1G config under
+  WSL2 — redeployed with `--memory 2G --reserve-memory 0M`, stable since. The test's skip-guard
+  handled the outage honestly between restarts.
+
+### E4 — credentialed SSH sensor ✅ PROVEN
+- Deployment: `rsec-sshd` container (linuxserver/openssh-server, key-only auth, port 2224) with a
+  generated ed25519 PoC keypair (`.ssh-poc/`, gitignored).
+- Adapter: `src/orchestration/sshSensor.ts` — **fixed read-only allowlist** (kernel, os-release,
+  listening ports, package inventory, uptime) executed via the OS `ssh` binary through runProcess
+  (no shell, argument array, timeout/abort). Nothing operator-supplied is ever executed.
+- Evidence (live run against the container): `kernel: Linux 6.18.54.1-microsoft-standard-WSL2`,
+  `os: Alpine Linux`, `listening ports: 2222`, `packages: 62 (acl-libs-2.3.2-r1, …)`; inventory
+  merged into the graph as a host node with `credentialed: true` + `exposes` edges (3.3: credentialed
+  value wins). Permanent test green (skips when sshd/key absent).
+- Issue found: `ss … | tail || netstat …` never falls back (pipe exit code) — allowlist commands
+  restructured with grouped fallbacks.
+
+### E5 — cloud metadata merge ✅ PROVEN
+- Adapter: `src/orchestration/cloudMetadata.ts` — full **AWS IMDSv2 protocol** (PUT token →
+  token-authed identity document), endpoint configurable so the same code runs against a local
+  IMDSv2 emulation now and the real 169.254.169.254 in-cloud.
+- Evidence: token `POC-TOKEN-abc123` issued; identity
+  `{accountId:111122223333, region:ap-south-1, instanceId:i-0abc…, instanceType:t3.medium}` fetched;
+  merged onto the host node **by the same asset UID** — host attrs became
+  `{"cloudAccountId":"111122223333","cloudRegion":"ap-south-1"}` with `member_of` + `runs` edges.
+  Permanent test green (self-contained, always runs).
+- **Issue found and fixed (real graph bug):** edge assertions re-upserted endpoint nodes with EMPTY
+  attributes, **clobbering** previously merged context. `GraphStore.upsertNode` now MERGES
+  attributes and provenance on re-observation (correct per 3.3 "results merge into the same host
+  node"); regression-covered by the E5 PoC test.
+
+### T4.7 — blind-SSRF OOB correlation loop ✅ PROVEN (loop; public routing remains)
+- `test/unit/oob-loop.test.ts`: a fixture with a genuine SSRF sink (`?url=` fetched server-side,
+  response blind) is probed by `BlindSsrfProbeEngine`; the fixture's server-side request hits the
+  OOB callback server; the probe correlates the unique token.
+- Evidence: `res.findings.length === 1`, `rawId: blind-ssrf-oob`, severity `critical`,
+  status `confirmed`, CWE 918, evidence names the server-side callback. Permanent test green.
+- What this proves: token generation → injection → server-side request → callback → correlation →
+  confirmed finding. The ONLY missing piece for public targets remains a publicly reachable callback
+  host (DNS + egress) — unchanged and documented.
+
+### C1/T10.1-lite — Postgres writable from the platform ✅ PROVEN
+- `src/db/pgWire.ts`: a minimal Postgres **wire-protocol client in stdlib** (`node:net`,
+  protocol 3.0 simple query: startup, auth handling, RowDescription/DataRow/CommandComplete/
+  ErrorResponse/ReadyForQuery parsing). **Honest limit: TRUST auth only** — the client fails closed
+  with a clear error when the server requests SCRAM (verified live); production needs SCRAM
+  (implementable with node:crypto) or the `pg` driver (ADR exception).
+- Setup: dedicated `pocuser` with a top-of-file trust pg_hba line + grants in the `rsec-postgres`
+  container.
+- Evidence: node `ip:XVXRXAFSV5` created by the platform's GraphStore and written through the wire
+  client (`insert command: INSERT`), read back byte-identical:
+  `{"uid":"ip:XVXRXAFSV5","type":"ip","identity":"198.51.100.7",…}`. Permanent test green (skips
+  when postgres is down).
+- **Issue found and fixed (real client bug):** the ReadyForQuery handler only resolved the CONNECT
+  promise — every query hung forever. Fixed: 'Z' resolves the pending query result. (Found because
+  the first PoC run hung; the failure mode itself was the honest discovery path.)
+
+### Still not implemented (unchanged, genuinely external)
+- **Temporal server deployment** — the state machine is worker-ready but a real Temporal worker
+  requires `@temporalio/sdk` (violates the zero-dep ADR); a server-without-worker proves nothing.
+- **E4 at real scale** (many hosts, vault-managed keys) — the PoC proves one container via key auth.
+- **E5 against real cloud** — same code, needs `169.254.169.254` reachability.
+- **T4.7 public callback host** — DNS + egress.
+- **Per-CVE EPSS/CVSS feed** — advisory data source.

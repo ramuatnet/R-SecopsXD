@@ -11,3 +11,4 @@ data/
 data-demo/
 *.log
 
+.ssh-poc/

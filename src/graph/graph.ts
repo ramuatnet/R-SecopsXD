@@ -48,12 +48,17 @@ export class GraphStore {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       ).run(uid, a.type, identity, a.display, attrs, at, at, at, at, prov);
     } else {
+      // Re-observation MERGES attributes (3.3: results merge into the same
+      // node) — an edge assertion must not clobber previously merged context.
+      const existing = this.db.prepare('SELECT attributes_json, provenance_json FROM graph_nodes WHERE uid = ?').get(uid) as { attributes_json: string; provenance_json: string };
+      const mergedAttrs = { ...(JSON.parse(existing.attributes_json) as Record<string, unknown>), ...(a.attributes ?? {}) };
+      const mergedProv = [...new Set([...(JSON.parse(existing.provenance_json) as string[]), ...(a.provenance ?? [])])];
       this.db.prepare(
         `UPDATE graph_nodes
          SET display = ?, attributes_json = ?, last_seen = ?, observed_at = ?, valid_to = NULL,
              provenance_json = ?
          WHERE uid = ?`,
-      ).run(a.display, attrs, at, at, prov, uid);
+      ).run(a.display, JSON.stringify(mergedAttrs), at, at, JSON.stringify(mergedProv), uid);
     }
     return uid;
   }
