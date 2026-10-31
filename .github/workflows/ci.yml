@@ -8,6 +8,20 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    # M3 (hardtask.md): the DDL drift gate and the Postgres wire-protocol PoC
+    # run against a REAL postgres:16 service container on the runner.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,9 +31,21 @@ jobs:
         run: npm ci || npm install
       - name: Template pack lint (N3/N7/N9 — a template without '# source:' fails the gate)
         run: npm run lint:templates
+      - name: Gate negative test (K3 — a template without '# source:' must FAIL lint)
+        run: |
+          mkdir -p /tmp/badtpl
+          printf 'id: rsec-bad\ninfo:\n  name: bad\n  tags: nope\nhttp:\n  - method: GET\n    path:\n      - "{{BaseURL}}/x"\n    matchers:\n      - type: word\n        words:\n          - "a"\n' > /tmp/badtpl/rsec-bad.yaml
+          node --input-type=module -e "const { lintTemplates } = await import(process.cwd() + '/scripts/lint-templates.ts'); const v = lintTemplates('/tmp/badtpl'); console.log('violations (must be > 0):', v.length); process.exit(v.length > 0 ? 0 : 1);"
+      - name: Prepare Postgres (M3/C1 — ltree + graph DDL + trust PoC user)
+        run: |
+          CID=$(docker ps -qf "name=postgres")
+          docker exec $CID psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS ltree;"
+          docker exec -i $CID psql -U postgres < db/postgres/001_asset_graph.sql
+          docker exec $CID bash -c "sed -i '1i host all pocuser 0.0.0.0/0 trust' /var/lib/postgresql/data/pg_hba.conf"
+          docker exec $CID psql -U postgres -c "CREATE USER pocuser; ALTER USER pocuser CREATEDB; GRANT CREATE ON DATABASE postgres TO pocuser; GRANT USAGE ON SCHEMA public TO pocuser; GRANT ALL ON ALL TABLES IN SCHEMA public TO pocuser; SELECT pg_reload_conf();"
       - name: Typecheck (strict strip-only TS)
         run: npx tsc --noEmit
       - name: Canary — parser mapping + integrity (N10)
         run: npm run canary
-      - name: Test suite (includes egress-audit of nuclei argv, G4)
+      - name: Test suite (DDL drift gate + wire PoC + egress audit + recall floors)
         run: npm test

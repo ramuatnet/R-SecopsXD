@@ -15,18 +15,24 @@ const SEV_BADGE: Record<string, string> = {
   low: 'badge low', info: 'badge info',
 };
 
-export function buildHtmlReport(scan: Scan, rawFindings: Finding[], generatedAt = new Date().toISOString()): string {
+export function buildHtmlReport(
+  scan: Scan,
+  rawFindings: Finding[],
+  generatedAt = new Date().toISOString(),
+  opts: { fanoutOf?: (f: Finding) => number; quality?: { recall: number | null; precision: number | null; basis: string; matchedTruth: string[]; totalTruth: number; totalFindings: number } | undefined } = {},
+): string {
   const findings = rawFindings.map(redactFindingEvidence);
   const sorted = [...findings].sort((a, b) => sevRank(b.severity) - sevRank(a.severity));
   const sev = countBy(sorted, (f) => f.severity);
   let risk: ReturnType<typeof riskForFinding>;
+  const quality = opts.quality ?? { recall: null, precision: null, basis: 'unavailable', matchedTruth: [] as string[], totalTruth: 0, totalFindings: rawFindings.length };
   const status = countBy(sorted, (f) => f.status);
   const ranEngines = scan.engines.filter((e) => e.status === 'ran');
   const unavailable = scan.engines.filter((e) => e.status === 'unavailable' || e.status === 'failed');
 
   const findingsHtml = sorted.map((f, i) => `
   <section class="finding">
-    ${(() => { risk = riskForFinding(f); return ''; })()}
+    ${(() => { risk = riskForFinding(f, opts.fanoutOf !== undefined ? { fanout: opts.fanoutOf(f) } : {}); return ''; })()}
     <h3><span class="num">#${i + 1}</span> ${esc(f.title)}</h3>
     <div class="badges">
       <span class="badge cat">${f.category} · ${esc(OWASP_CATEGORIES[f.category].name)}</span>
@@ -119,6 +125,13 @@ footer { margin-top: 24px; color: var(--muted); font-size: 11.5px; }
 <table>
 <tr><th>Severity</th>${['critical', 'high', 'medium', 'low', 'info'].map((s) => `<th>${s}</th>`).join('')}</tr>
 <tr><td>Findings</td>${['critical', 'high', 'medium', 'low', 'info'].map((s) => `<td>${sev[s] ?? 0}</td>`).join('')}</tr>
+</table>
+<table>
+<tr><th>Assessment quality (I3)</th><th>Value</th></tr>
+${quality.basis === 'unavailable'
+    ? '<tr><td>Recall / precision</td><td>not computed — no ground truth provided (pass <code>?truth=fixtures/&lt;app&gt;/truth.json</code> to measure)</td></tr>'
+    : `<tr><td>Recall</td><td><strong>${Math.round(quality.recall! * 100)}%</strong> (${quality.matchedTruth.length}/${quality.totalTruth} ground-truth items: ${esc(quality.matchedTruth.join(', ')) || '—'})</td></tr>
+<tr><td>Precision</td><td><strong>${Math.round(quality.precision! * 100)}%</strong> of ${quality.totalFindings} findings matched ground truth (fixture basis)</td></tr>`}
 </table>
 <table>
 <tr><th>Validation status</th><th>Count</th></tr>
