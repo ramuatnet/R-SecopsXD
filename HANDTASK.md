@@ -336,3 +336,84 @@ Suite after PoCs: **258/258**.
 - **E5 against real cloud** — same code, needs `169.254.169.254` reachability.
 - **T4.7 public callback host** — DNS + egress.
 - **Per-CVE EPSS/CVSS feed** — advisory data source.
+
+---
+
+## hardtask.md corrective tasks — implemented (2026-10-31, 306249b)
+
+The W1–W10 concerns and Phases H–N were implemented in the prescribed sequence.
+
+### Phase H — port-detection correctness (P0) ✅
+- **H1**: connect-with-no-protocol-answer is now **open (unverified)** — reported at info/low
+  confidence with status `untested`, never dropped (W1 resolved: SSH/Redis-style quiet services
+  survive; middleboxes cannot inflate severity). Both `scanPort` and the deep-recon path.
+- **H2**: suppression threshold **8** (was 5), full-signature identity (status + complete header
+  set + body), and **never-suppress** list 22/443/3306/3389/5432/6379/9200/27017 (W2 resolved).
+- **H3**: `port-scan-interference` at **low** severity; suppressed count surfaces in scan detail
+  ("N ports suppressed as middlebox interception").
+- **H4**: truth.json grown with V13 (port 8899); recall-floor test asserts the fixture port
+  surfaces on every run.
+- Counter-tests (I16): silent-listener fixture → unverified finding; 6-identical-response fixture →
+  NOT suppressed; 8-identical → suppressed; differing status/headers survive; critical ports exempt;
+  middlebox fixture yields **zero phantom highs**. `test/unit/phase-h.test.ts` — 8/8.
+
+### Phase I — verification honesty (P0) ✅
+- **I1**: auto-rejections counted per scan (engine record + audit); `findTruePositiveRejections`
+  guard — the e2e asserts no planted TP is auto-rejected, and proves a forced rejection is caught.
+- **I2**: `rejected_by_verification` is a distinct ValidationStatus from human `false_positive`
+  (W3 resolved); stats carry the counter.
+- **I3**: `scoreAgainstTruth` harness; JSON report carries `quality: {recall, precision, basis}`
+  (`?truth=fixtures/vuln-app/truth.json` opt-in; basis 'unavailable' otherwise — honest).
+
+### Phase J — supply chain (P1) ✅
+- **J1/I18**: two-stage authenticity — the pinned **published-artifact** hash must appear in the
+  vendor's committed checksums.txt, and the on-disk binary must match the pinned extracted hash;
+  both fail closed. Verified live: our downloaded zip hash `bb6cb9ff…` matches the official
+  `nuclei_3.11.1_checksums.txt` (W6 resolved — authenticity, not just stability).
+- **J2**: pack digest (sha256 over index.json + all templates) rides in every nuclei finding's
+  provenance.
+- **J3**: `templates/pack-version.json` pins {version, digest}; lint fails on drift — template
+  changes require a bump commit.
+
+### Phase K — API + CI truth (P1) ✅
+- **K1**: `profile` and `profileId` both accepted; missing/unknown profile = 400, never a silent
+  standard-active (W8 resolved). Tested.
+- **K2**: CI is real — runs on GitHub runners; `# source:` gate has executed there (green runs on
+  8d49230 and a1342f7). Run URLs in the memory/handover record; the Phases H–N push runs at
+  https://github.com/ramuatnet/R-SecopsXD/actions/runs/41179604153.
+- **K3**: gate-negative evidence: `lintTemplates(bad)` unit test proves a template without
+  `# source:` fails the gate.
+
+### Phase L — real enrichment (P1) ✅
+- **L1**: offline advisory snapshot (`src/risk/advisories.ts`, 12 CVEs, dated) — CVE-bearing
+  findings carry `base_source: 'epss'|'cvss'` with real bases (Log4Shell → base 1.0 via EPSS 0.976);
+  everything else explicit `'severity'` (W5 resolved to the honest extent possible offline).
+- **L2**: reports take graph fan-out for the blast factor; neutral only when the graph has no edges.
+- **L3**: the worked-example chain runs through the report pipeline in e2e (I3/L3 test asserts
+  quality + base_source + blast bounds on a real scan).
+
+### Phase M — capability unblocking (P2) ✅
+- **M1**: DONE previously — `CredentialedSshSensor` (system ssh, read-only allowlist) inventories
+  the sshd container; patch level lands on the host node (W10 resolved).
+- **M2**: TTL OS hypothesis via the **system ping binary** (`src/orchestration/ttlProbe.ts`) —
+  proven on this host (TTL=128 → Windows). The "impossible in Node userspace" claim is rescinded
+  (W4 resolved); docs corrected.
+- **M3**: DDL drift gate — `001_asset_graph.sql` is applied to a throwaway schema on the live
+  postgres:16 in a permanent test; exactly three tables asserted (W7 partially resolved: schema
+  tested; the app still writes SQLite by design).
+- **M4**: localhost OOB callback mode proven (oob-loop test) — internal targets unblocked.
+
+### Phase N — docs truthfulness (P2) ✅
+- **N1**: DoD below rewritten to distinguish unit-tested vs live-verified.
+- **N2**: E-I2 and E4 claims corrected per M1/M2 outcomes.
+- **N3**: `LIMITATIONS.md` records that risk base is severity-derived unless a CVE is in the
+  offline snapshot, plus every other honest boundary.
+
+### Definition of done (hardtask.md §4) — verified
+- Zero-byte and identical-response rules both have counter-tests ✅ (H1/H2 tests, I16)
+- Planted TP rejection detectable/fails ✅ (I1 guard + e2e)
+- nuclei hash verified against published checksums ✅ (J1, live match proven)
+- profileId no longer silently defaults ✅ (K1)
+- A green runner CI exists ✅ (K2 — two green runs + URLs)
+- Risk base is real for CVE-bearing findings ✅ (L1, base_source explicit)
+- Recall and precision appear in reports (opt-in truth) ✅ (I3)
