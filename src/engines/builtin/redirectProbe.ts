@@ -58,6 +58,10 @@ export class RedirectProbeEngine implements Engine {
         if (candidates.length >= MAX_PARAMS) break;
       }
     }
+    // A2: no redirect-carrying parameters observed = not applicable (honest skip).
+    if (candidates.length === 0) {
+      return { findings: [], notExecutedReason: 'no redirect-carrying query parameters observed in crawl — open-redirect probe not applicable' };
+    }
 
     for (const { url, param } of candidates) {
       if (ctx.signal.aborted) break;

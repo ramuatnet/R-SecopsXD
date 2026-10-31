@@ -23,6 +23,7 @@ import { ScopedHttpClient, type RequestStats } from './httpClient.ts';
 import { normalizeFinding } from './normalize.ts';
 import { dedupeFindings } from '../core/ids.ts';
 import { computeCoverage } from './coverage.ts';
+import { verifyByType, applyVerification } from '../verify/verify.ts';
 import { runLoopScan } from './loopRunner.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
@@ -211,6 +212,8 @@ export class Orchestrator {
     const plan = enginePlan(profile, mode);
     for (const step of plan) {
       if (signal.aborted) break;
+      // A2: variant-hunter runs in a dedicated post-verification stage below.
+      if (step.id === 'builtin.variant-hunter') continue;
       const engine = this.registry.create(step.id, profile.maxCrawlPages);
       if (!engine) {
         engineRecords.push({ engine: step.id, status: 'skipped', findingCount: 0, durationMs: 0, detail: 'unknown engine id' });
@@ -289,6 +292,70 @@ export class Orchestrator {
           version: availability.version,
         });
         if (aborted) break;
+      }
+    }
+
+    // A2: verification + variant-hunter stage. Seeds must exist before variant
+    // hunting runs, and probes that consumed no input must read "skipped with
+    // reason", never "ran 0ms".
+    const variantStep = plan.find((s) => s.id === 'builtin.variant-hunter');
+    if (variantStep !== undefined) {
+      const variantStart = Date.now();
+      const record = (status: EngineRunRecord['status'], detail: string, findingCount = 0): void => {
+        engineRecords.push({ engine: 'builtin.variant-hunter', status, findingCount, durationMs: Date.now() - variantStart, detail });
+      };
+      if (!variantStep.willRun) {
+        record('skipped', 'active mode not enabled for this scan');
+      } else if (signal.aborted) {
+        record('skipped', 'scan cancelled before variant stage');
+      } else {
+        const seeds = findings
+          .filter((f) => f.evidence.some((e) => e.kind === 'http') && (f.status === 'probable' || f.status === 'confirmed'))
+          .slice(0, 8);
+        if (seeds.length === 0) {
+          record('skipped', 'no HTTP-evidence findings to seed variant hunting — not applicable to this scan');
+        } else {
+          // Verify seeds first (bounded) — promotion/refusal is audited.
+          for (const seed of seeds) {
+            if (signal.aborted) break;
+            try {
+              const report = await verifyByType(seed, client);
+              applyVerification(findings, report, (action, details) =>
+                this.db.audit({ actor: 'system', action, details: { scanId, ...details } }));
+            } catch { /* verification is best-effort; seeds remain probable */ }
+          }
+          const engine = this.registry.create('builtin.variant-hunter', profile.maxCrawlPages);
+          if (engine === undefined) {
+            record('skipped', 'unknown engine id');
+          } else {
+            const availability = await this.registry.availability('builtin.variant-hunter');
+            if (!availability.available) {
+              record('unavailable', availability.reason ?? 'unavailable');
+            } else {
+              const vCtx = {
+                scanId, target, mode,
+                credentials: target.kind === 'webapp' ? this.db.getCredentials(target.id) : undefined,
+                credentialsSecondary: target.kind === 'webapp' ? this.db.getCredentials(target.id, 'secondary') : undefined,
+                client, guard, stats, signal, workDir,
+                crawl: crawlContext.corpus as never,
+                seedFindings: seeds,
+                log: (msg: string, fields?: Record<string, unknown>) => log.info(`[builtin.variant-hunter] ${msg}`, { scanId, ...fields }),
+              };
+              try {
+                const result = await withTimeout(engine.run(vCtx), this.config.engineTimeoutMs, 'builtin.variant-hunter', signal);
+                record('ran', result.detail ?? '', result.findings.length);
+                for (const raw of result.findings) {
+                  findings.push(normalizeFinding(raw, {
+                    target, engineId: 'builtin.variant-hunter', engineVersion: result.version ?? 'builtin',
+                    adapter: false, triages,
+                  }));
+                }
+              } catch (e) {
+                record(signal.aborted ? 'cancelled' : 'failed', e instanceof Error ? e.message : String(e));
+              }
+            }
+          }
+        }
       }
     }
 

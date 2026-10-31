@@ -34,7 +34,10 @@ export function normalizeLocator(locator: string): string {
     } catch { /* not a URL after all — fall through to generic handling */ }
   }
   l = l.replace(/\/+$/, '');
-  l = l.replace(/:\d+(-\d+)?$/, ''); // file locators: strip line numbers
+  // file locators: strip trailing :line(-line) — but only for real file paths.
+  // host:port locators (ip:3306) MUST keep their port: stripping it collapsed
+  // every port finding on one host into a single fingerprint (newtask V1).
+  if (l.includes('/')) l = l.replace(/:\d+(-\d+)?$/, '');
   return l;
 }
 

@@ -42,6 +42,18 @@ const INFRA_PORTS = [22, 21, 23, 25, 135, 139, 445, 3389, 3306, 5432, 6379, 2701
 const TLS_PORTS = new Set([443, 8443, 2376, 6443]);
 const HTTP_PORTS = new Set([80, 8080, 8443, 8000, 8008, 8081, 5000, 3000, 8888, 9000, 9090, 9200, 7001, 4848, 5984]);
 const MGMT_PORTS = new Set([8080, 8443, 9000, 4848, 7001, 6443, 2375, 2376, 11211]);
+
+// A1 (newtask): port exposure classes. Findings are emitted PER PORT —
+// info for normal web ports, medium for risky-by-default app/dev ports,
+// high for databases / remote access / cluster APIs reachable at the edge.
+const HIGH_PORTS = new Set([21, 23, 135, 139, 445, 3389, 5900, 2375, 2376, 3306, 5432, 6379, 6443, 9200, 11211, 27017, 5984]);
+const MEDIUM_PORTS = new Set([3000, 5000, 7001, 8000, 8008, 8080, 8081, 8888, 9000, 9090]);
+
+export function portSeverity(port: number): 'info' | 'medium' | 'high' {
+  if (HIGH_PORTS.has(port)) return 'high';
+  if (MEDIUM_PORTS.has(port)) return 'medium';
+  return 'info';
+}
 const MAX_IPS = 4;
 const PORT_BATCH = 40;
 const PROBE_TIMEOUT_MS = 3000;
@@ -185,6 +197,13 @@ export function httpRecon(host: string, port: number, hostname: string, useTls: 
           socket.write(req);
           collect(socket, RECON_BODY_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => {
             const parsed = parseHttpResponse(raw);
+            // A SYN-ACK with zero response bytes is NOT evidence of an open
+            // port — port-forwarding middleboxes accept every connect. Only
+            // an actual protocol answer (HTTP or any banner bytes) counts.
+            if (!parsed.isHttp && raw.trim() === '') {
+              resolve({ open: false, sans: [], isHttp: false, status: 0, headers: {}, body: '' });
+              return;
+            }
             resolve({ open: true, sans: [], isHttp: parsed.isHttp, status: parsed.status, headers: parsed.headers, body: parsed.body });
           });
         }
@@ -298,6 +317,46 @@ const TECH_SIGNATURES: TechSig[] = [
   { re: /<title>IIS Windows Server/i, product: 'IIS default page', note: 'default landing page — deployment not customized' },
 ];
 
+// ---------- interception detection (middleboxes that answer every port) ----------
+
+const INTERCEPTION_MIN_PORTS = 5;
+
+interface InterceptionInput { port: number; recon?: HttpRecon; banner?: string; }
+
+/**
+ * Some gateways SYN-ACK every port and answer HTTP (block pages) uniformly.
+ * If >=5 probed ports return the exact same response signature, those are
+ * interception artifacts, not individual services — suppress them and report
+ * the interference itself. Real distinct services never share one response.
+ */
+export function detectInterception(
+  ops: InterceptionInput[],
+): { suppressed: Set<number>; sample: string | undefined } {
+  const bySig = new Map<string, InterceptionInput[]>();
+  for (const op of ops) {
+    const sig = op.recon !== undefined && op.recon.isHttp
+      ? `http:${op.recon.status}:${op.recon.body.slice(0, 400)}`
+      : `banner:${(op.recon !== undefined ? JSON.stringify(op.recon.headers) : (op.banner ?? '')).slice(0, 400)}`;
+    const list = bySig.get(sig) ?? [];
+    list.push(op);
+    bySig.set(sig, list);
+  }
+  const suppressed = new Set<number>();
+  let sample: string | undefined;
+  for (const group of bySig.values()) {
+    if (group.length >= INTERCEPTION_MIN_PORTS) {
+      for (const op of group) suppressed.add(op.port);
+      if (sample === undefined) {
+        const g0 = group[0]!;
+        sample = g0.recon !== undefined && g0.recon.isHttp
+          ? `HTTP ${g0.recon.status} body: ${g0.recon.body.slice(0, 120).replace(/\s+/g, ' ')}`
+          : `banner: ${(g0.banner ?? '(uniform non-HTTP answer)').slice(0, 120)}`;
+      }
+    }
+  }
+  return { suppressed, sample };
+}
+
 function osHint(banner: string): string | undefined {
   if (/microsoft-iis|asp\.net|windows-server/i.test(banner)) return 'Windows';
   if (/ubuntu|debian|centos|red\s*hat|fedora/i.test(banner)) return 'Linux/Unix';
@@ -346,7 +405,7 @@ export class HostInfraEngine implements Engine {
       confidence: 'high',
       status: 'informational',
       asset,
-      locator: res.ips[0]!,
+      locator: hostname,
       evidence: [{
         kind: 'process',
         command: `DNS lookup ${hostname} (A/AAAA/CNAME/PTR)`,
@@ -399,6 +458,42 @@ export class HostInfraEngine implements Engine {
       return { findings, detail: `resolved ${res.ips.length} IP(s); ${ports.length} ports probed per IP — none answered (closed or filtered)` };
     }
 
+    // Suppression: identical answers across many ports = middlebox, not services.
+    let suppressedCount = 0;
+    let interferenceSample: string | undefined;
+    for (const [ip, ops] of byIp) {
+      const { suppressed, sample } = detectInterception(ops);
+      if (suppressed.size === 0) continue;
+      suppressedCount += suppressed.size;
+      interferenceSample = interferenceSample ?? sample;
+      byIp.set(ip, ops.filter((op) => !suppressed.has(op.port)));
+      if (byIp.get(ip)!.length === 0) byIp.delete(ip);
+    }
+    if (suppressedCount > 0) {
+      findings.push({
+        rawId: 'port-scan-interference',
+        title: `Port-scan interference: ${suppressedCount} port(s) returned an identical response — middlebox answers for the whole set, individual services not confirmed`,
+        category: 'A01',
+        severity: 'info',
+        confidence: 'medium',
+        status: 'informational',
+        asset,
+        locator: res.ips[0]!,
+        evidence: [{
+          kind: 'process',
+          command: 'Cross-port response comparison',
+          observation: `${suppressedCount} probed ports share one response signature: ${interferenceSample ?? '(uniform answer)'}. A gateway/DPI middlebox is answering for ports it does not forward; they are treated as not confirmed rather than open.`,
+        }],
+        explanation: 'A middlebox SYN-ACKs (and answers) every probed port. Treating those as open ports would flood the report with false positives; the uniform answer itself indicates filtering/monitoring in front of the host.',
+        remediation: 'No direct action; interpret port results accordingly. Re-verify from a different network path if confirmation is required.',
+        references: [],
+      });
+    }
+
+    if (byIp.size === 0) {
+      return { findings, detail: `resolved ${res.ips.length} IP(s); ${ports.length} ports probed — ${suppressedCount} suppressed as middlebox interception, no confirmed services` };
+    }
+
     let edgeNoted = false;
     for (const [ip, ops] of byIp) {
       const portList = ops.map((o) => `${o.port}${o.recon?.protocol !== undefined ? '/tls' : 'tcp'}`).join(', ');
@@ -435,6 +530,39 @@ export class HostInfraEngine implements Engine {
       });
 
       for (const op of ops) {
+        // A1: per-port finding with exposure-class severity — open ports must
+        // surface as first-class results, not only inside the host summary.
+        const sev = portSeverity(op.port);
+        const portSvc = op.recon !== undefined && op.recon.isHttp
+          ? `HTTP ${op.recon.status}`
+          : (op.banner ?? '').split('\r\n')[0]?.slice(0, 60) || 'tcp';
+        findings.push({
+          rawId: 'port-open',
+          title: `Port ${op.port} open on ${ip} (${portSvc})`,
+          category: 'A01',
+          severity: sev,
+          confidence: 'high',
+          status: 'confirmed',
+          asset,
+          locator: `${ip}:${op.port}`,
+          evidence: [{
+            kind: 'process',
+            command: `TCP connect ${ip}:${op.port}`,
+            observation: `Port answers. Exposure class: ${sev}${HIGH_PORTS.has(op.port) ? ' (database/remote-access/cluster API reachable at the edge)' : MEDIUM_PORTS.has(op.port) ? ' (risky-by-default app/dev port)' : ''}`,
+          }],
+          explanation:
+            sev === 'high'
+              ? 'This port exposes a service that should normally never be reachable from the public internet (database, remote access, message queue or cluster API). Its presence at the edge is itself the finding — even if authentication currently holds.'
+              : sev === 'medium'
+                ? 'This port commonly hosts development servers, alternate app instances or admin tooling. Confirm the service is intended to be public and hardened.'
+                : 'Standard web port reachable at the edge. Expected for a public site; review only in combination with what answers on it.',
+          remediation:
+            sev === 'high'
+              ? 'Restrict this port at the firewall/security group to known source ranges (VPN/bastion). If it must stay reachable, put it behind authenticated proxies and alert on new bindings.'
+              : 'Verify the service on this port is intended and up to date; suppress version banners.',
+          references: [],
+        });
+
         const bannerStr = op.banner ?? '';
         const fp: ServiceFingerprint = op.recon !== undefined && op.recon.protocol !== undefined
           ? { service: 'https' }

@@ -1,0 +1,32 @@
+id: rsec-database-dump-exposure
+info:
+  name: Exposed database dump
+  author: r-secopsxd
+  severity: high
+  description: Exposed database dump - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,database,backup,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/dump.sql"
+      - "{{BaseURL}}/database.sql"
+      - "{{BaseURL}}/db.sql"
+      - "{{BaseURL}}/backup.sql"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "CREATE TABLE"
+          - "INSERT INTO"
+        condition: or
+      - type: status
+        part: status
+        status:
+          - 200

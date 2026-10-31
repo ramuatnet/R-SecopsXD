@@ -38,8 +38,8 @@ test('passive scan with clean engines: executed tasks AUTOMATED_PASS, manual sta
     'standard-passive', [], 'webapp', 'passive',
   );
   const a02 = coverage.find((c) => c.category === 'A02')!;
-  assert.equal(a02.status, 'COVERED_WITH_EVIDENCE',
-    'all mandatory passive A02 tasks ran clean (active task is outside the passive profile scope)');
+  assert.equal(a02.status, 'RAN_CLEAN',
+    'A4: all mandatory passive A02 tasks ran clean with zero findings — ran-but-empty, never covered');
   const t01 = a02.tasks!.find((t) => t.taskId === 'A02-T01')!;
   assert.equal(t01.status, 'AUTOMATED_PASS', 'clean run of headers task');
   assert.ok(a02.note.includes('scope') || a02.note.includes('not applicable') || a02.note.includes('manual'),

@@ -1,37 +1,130 @@
 /**
- * Nuclei template-based testing adapter (webapp targets).
+ * Nuclei template-based testing adapter (webapp targets) — in-house pack.
  *
- * Passive mode uses `-passive` (response analysis only). Active mode runs
- * the full engine but ALWAYS with the deny list `-etags dos,fuzz,brute-force`
- * plus a rate limit, honoring the platform's no-DoS / no-bruteforce policy.
- * Nuclei executes its own HTTP client: scope is enforced at the entry URL
- * (see THREAT-MODEL residual risk note).
+ * Phase B (newtask.md N1–N8): runs ONLY the curated in-house templates/
+ * directory (no auto-downloaded template sets), gated by declared target
+ * capabilities (N5) so templates never burn requests on absent surface
+ * (V3-class waste). The pinned binary is integrity-checked at startup (N6)
+ * and its version is recorded in every finding's provenance. The deny list
+ * and rate limits keep the no-DoS / no-bruteforce policy. Nuclei executes its
+ * own HTTP client: scope is enforced at the entry URL (residual risk noted in
+ * THREAT-MODEL).
  */
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Engine, EngineAvailability, EngineRunResult, ScanContext } from '../types.ts';
 import { cap } from '../types.ts';
 import type { EngineInfo, RawFinding, Severity } from '../../core/types.ts';
 import { classifyFinding } from '../../core/cweMap.ts';
-import { BinaryNotFoundError, detectVersion, runProcess } from './common.ts';
+import { BinaryNotFoundError, detectVersion, resolveBinary, runProcess } from './common.ts';
 import { redactText } from '../../core/redact.ts';
 
 const INFO: EngineInfo = {
   id: 'adapter.nuclei',
-  name: 'Nuclei (template scanning)',
+  name: 'Nuclei (in-house template pack)',
   kind: 'adapter',
   capabilities: {
-    A02: cap('misconfiguration and exposure templates (deny-listed tags only)', 'strong'),
-    A01: cap('exposure/IDOR-surface templates (deny-listed tags only)', 'heuristic'),
-    A03: cap('disclosed sensitive files/tech-stack templates', 'heuristic'),
-    A04: cap('weak TLS/crypto templates (limited without dedicated TLS tooling)', 'heuristic'),
-    A05: cap('injection detection templates (non-destructive subset)', 'heuristic'),
-    A07: cap('auth-bypass and default-credential templates (deny-listed tags only)', 'heuristic'),
-    A10: cap('error/stack-trace disclosure templates', 'heuristic'),
+    A02: cap('in-house exposure/admin-console templates (deny-listed tags only)', 'strong'),
+    A01: cap('in-house sensitive-file and API-surface templates (capability-gated)', 'strong'),
+    A03: cap('in-house dependency/key-disclosure templates', 'strong'),
+    A07: cap('in-house default-credential-page template', 'heuristic'),
+    A10: cap('in-house verbose-error templates', 'strong'),
   },
   modes: ['passive', 'active'],
   targetKinds: ['webapp'],
 };
 
 const DENY_TAGS = 'dos,fuzz,brute-force,intrusive,destructive';
+
+export function templatesDir(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'templates');
+}
+
+interface TemplateIndexEntry { file: string; id: string; severity?: string; requires?: string[]; }
+interface TemplateIndex { schema: string; templates: TemplateIndexEntry[]; }
+
+export async function loadTemplateIndex(dir = templatesDir()): Promise<TemplateIndex> {
+  const raw = JSON.parse(await readFile(join(dir, 'index.json'), 'utf8')) as TemplateIndex;
+  return raw;
+}
+
+/**
+ * N5: infer target capabilities from the crawl corpus. Unknown stays unknown
+ * (I8) — a capability that cannot be confirmed never unlocks gated templates.
+ */
+export function inferCapabilities(crawl: ScanContext['crawl']): Set<string> {
+  const caps = new Set<string>();
+  if (!crawl) return caps;
+  const hay = [
+    ...crawl.pages.map((p) => `${p.url}\n${p.body.slice(0, 4000)}`),
+    ...(crawl.discoveredEndpoints ?? []),
+  ].join('\n').toLowerCase();
+  if (hay.includes('/graphql') || hay.includes('graphiql')) caps.add('graphql');
+  if (hay.includes('/openapi') || hay.includes('swagger')) caps.add('openapi');
+  return caps;
+}
+
+/** N5: keep ungated templates + gated templates whose capability is confirmed. */
+export function gateTemplates(entries: TemplateIndexEntry[], caps: Set<string>): TemplateIndexEntry[] {
+  return entries.filter((e) => (e.requires ?? []).every((r) => caps.has(r)));
+}
+
+/** N8: pure argv construction — auditable. Exactly one target: -u origin. */
+export function buildNucleiArgs(
+  origin: string,
+  mode: 'passive' | 'active',
+  templateFiles: string[],
+  dir = templatesDir(),
+): string[] {
+  const args: string[] = ['-u', origin];
+  if (templateFiles.length === 0) {
+    args.push('-t', dir);
+  } else {
+    for (const f of templateFiles) args.push('-t', join(dir, f));
+  }
+  args.push('-jsonl', '-silent', '-duc', '-etags', DENY_TAGS);
+  args.push('-rate-limit', '50', '-concurrency', '10', '-timeout', '10', '-retries', '1');
+  if (mode === 'passive') args.push('-passive');
+  return args;
+}
+
+// ---------- N6: binary integrity ----------
+
+export interface IntegrityResult { available: boolean; reason?: string | undefined; version?: string | undefined; }
+
+export async function checkBinaryIntegrity(binary = 'nuclei'): Promise<IntegrityResult> {
+  let version: string | undefined;
+  try {
+    version = await detectVersion(binary, ['-version'], 20_000);
+  } catch (e) {
+    if (e instanceof BinaryNotFoundError) {
+      return { available: false, reason: 'nuclei is not installed (in-house templates require the pinned binary)' };
+    }
+    return { available: false, reason: `nuclei probe failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  try {
+    const pin = JSON.parse(await readFile(join(templatesDir(), 'nuclei-pin.json'), 'utf8')) as {
+      version?: string; sha256?: Record<string, string>;
+    };
+    const pinnedVersion = (pin.version ?? '').trim();
+    if (pinnedVersion !== '' && version !== undefined && !version.includes(pinnedVersion)) {
+      return { available: false, reason: `nuclei version mismatch: pinned ${pinnedVersion}, found ${version}`, version };
+    }
+    const binaryPath = resolveBinary(binary);
+    const pinnedHash = pin.sha256?.[process.platform];
+    if (binaryPath !== undefined && pinnedHash !== undefined && pinnedHash !== '') {
+      const hash = createHash('sha256').update(await readFile(binaryPath)).digest('hex');
+      if (hash !== pinnedHash) {
+        return { available: false, reason: `nuclei binary SHA-256 mismatch — refusing to execute (supply-chain guard, N6)`, version };
+      }
+    }
+    return { available: true, version };
+  } catch (e) {
+    return { available: false, reason: `integrity check failed: ${e instanceof Error ? e.message : String(e)}`, version };
+  }
+}
 
 interface NucleiEvent {
   'template-id'?: string;
@@ -71,41 +164,44 @@ export class NucleiAdapter implements Engine {
   info = INFO;
 
   async availability(): Promise<EngineAvailability> {
-    try {
-      const version = await detectVersion('nuclei', ['-version'], 20_000);
-      return { available: true, version };
-    } catch (e) {
-      if (e instanceof BinaryNotFoundError) {
-        return {
-          available: false,
-          reason: 'nuclei is not installed or not on PATH (templates are downloaded on first run)',
-          installHint: 'go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest  |  https://docs.projectdiscovery.io/tools/nuclei/install',
-        };
-      }
-      return { available: false, reason: `nuclei probe failed: ${e instanceof Error ? e.message : String(e)}` };
+    const integrity = await checkBinaryIntegrity();
+    if (!integrity.available) {
+      return {
+        available: false,
+        reason: integrity.reason ?? 'unavailable',
+        installHint: 'place the pinned nuclei binary on PATH and record its version + sha256 in templates/nuclei-pin.json',
+      };
     }
+    return { available: true, version: integrity.version };
   }
 
   async run(ctx: ScanContext): Promise<EngineRunResult> {
-    const args: string[] = [
-      '-u', ctx.target.origin,
-      '-jsonl', '-silent',
-      '-etags', DENY_TAGS, // hard safety policy: no DoS/fuzz/bruteforce templates
-      '-rate-limit', '50',
-      '-concurrency', '10',
-      '-timeout', '10',
-      '-retries', '1',
-    ];
-    if (ctx.mode === 'passive') args.push('-passive');
+    const integrity = await checkBinaryIntegrity();
+    if (!integrity.available) {
+      return { findings: [], notExecutedReason: integrity.reason ?? 'nuclei unavailable (integrity)' };
+    }
 
+    const index = await loadTemplateIndex();
+    const caps = inferCapabilities(ctx.crawl);
+    const eligible = gateTemplates(index.templates, caps);
+    if (eligible.length === 0) {
+      return { findings: [], notExecutedReason: 'no templates eligible: capability requirements not confirmed for this target (N5 gating)' };
+    }
+
+    const args = buildNucleiArgs(ctx.target.origin, ctx.mode, eligible.map((e) => e.file));
     const proc = await runProcess('nuclei', args, { timeoutMs: 600_000, signal: ctx.signal });
     if (proc.timedOut) return { findings: [], detail: 'nuclei timed out' };
     if (proc.exitCode !== 0 && proc.stdout.trim() === '') {
       return { findings: [], detail: `nuclei exited ${proc.exitCode}: ${proc.stderr.slice(0, 300)}` };
     }
 
-    const findings = NucleiAdapter.parseEvents(proc.stdout, ctx.target.origin, args.join(' '));
-    return { findings, version: await detectVersion('nuclei', ['-version'], 20_000).catch(() => undefined), detail: `${findings.length} nuclei matches` };
+    const findings = NucleiAdapter.parseEvents(proc.stdout, ctx.target.origin, `nuclei ${args.join(' ')} (binary: ${integrity.version ?? 'unknown'})`);
+    const gated = index.templates.length - eligible.length;
+    return {
+      findings,
+      version: integrity.version,
+      detail: `${findings.length} match(es) from ${eligible.length} in-house template(s)${gated > 0 ? ` (${gated} capability-gated off)` : ''}`,
+    };
   }
 
   /** Pure mapping from nuclei JSONL output to raw findings. */
@@ -140,10 +236,10 @@ export class NucleiAdapter implements Engine {
           kind: 'process' as const,
           command: commandLine,
           stdoutExcerpt: redactText(trimmed, 800),
-          observation: `nuclei template matched at ${matchedAt}`,
+          observation: `nuclei in-house template matched at ${matchedAt}`,
         }],
         explanation: (ev.info?.description ?? `Template ${ev['template-id']} matched this target.`).slice(0, 1000),
-        remediation: 'Review the matched template\'s documentation and verify the exposed behavior; apply the corresponding hardening.',
+        remediation: 'Review the matched template\'s cited source and verify the exposed behavior; apply the corresponding hardening.',
         references: Array.isArray(ev.info?.reference)
           ? ev.info.reference.slice(0, 3)
           : ev.info?.reference ? [ev.info.reference] : [],

@@ -1,0 +1,28 @@
+id: rsec-ds-store-exposure
+info:
+  name: Exposed .DS_Store
+  author: r-secopsxd
+  severity: low
+  description: Exposed .DS_Store - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,macos,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.DS_Store"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Bud1"
+        condition: or
+      - type: status
+        part: status
+        status:
+          - 200

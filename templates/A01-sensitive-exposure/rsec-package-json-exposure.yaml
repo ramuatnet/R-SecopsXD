@@ -1,0 +1,29 @@
+id: rsec-package-json-exposure
+info:
+  name: Exposed package.json
+  author: r-secopsxd
+  severity: info
+  description: Exposed package.json - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/README
+  classification:
+    cwe-id: CWE-200
+  tags: exposure,node,dependencies,rsec
+# source: WSTG-INFO; CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/package.json"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - ""dependencies""
+          - ""name""
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

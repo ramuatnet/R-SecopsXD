@@ -59,6 +59,8 @@ export interface ScanContext {
   workDir: string;
   /** Shared between engines: crawler-lite fills this, passive observers read it. */
   crawl?: CrawlCorpus | undefined;
+  /** A2: verified/probable findings from earlier stages — seeds for variant-hunter. */
+  seedFindings?: import('../core/types.ts').Finding[] | undefined;
   log: (msg: string, fields?: Record<string, unknown>) => void;
 }
 

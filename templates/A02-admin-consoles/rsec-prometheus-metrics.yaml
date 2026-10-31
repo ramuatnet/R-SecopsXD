@@ -1,0 +1,29 @@
+id: rsec-prometheus-metrics
+info:
+  name: Prometheus metrics endpoint exposed
+  author: r-secopsxd
+  severity: medium
+  description: Prometheus metrics endpoint exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-200
+  tags: metrics,prometheus,rsec
+# source: WSTG-CONF; CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/metrics"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "# HELP"
+          - "# TYPE"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

@@ -1,0 +1,30 @@
+id: rsec-gcp-key-exposure
+info:
+  name: Exposed GCP service account key
+  author: r-secopsxd
+  severity: critical
+  description: Exposed GCP service account key - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-522
+  tags: exposure,gcp,rsec
+# source: WSTG-CONF; CWE-522
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/service-account.json"
+      - "{{BaseURL}}/gcp-credentials.json"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - ""private_key""
+          - "service_account"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

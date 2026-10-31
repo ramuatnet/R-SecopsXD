@@ -1,0 +1,32 @@
+id: rsec-env-backup-exposure
+info:
+  name: Exposed .env backup variants
+  author: r-secopsxd
+  severity: high
+  description: Exposed .env backup variants - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,dotenv,backup,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.env.bak"
+      - "{{BaseURL}}/.env.old"
+      - "{{BaseURL}}/.env~"
+      - "{{BaseURL}}/.env.save"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "="
+          - "KEY"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

@@ -145,7 +145,7 @@ export async function huntVariants(
 
 import type { Engine, EngineAvailability, EngineRunResult, ScanContext } from '../types.ts';
 import { cap } from '../types.ts';
-import type { EngineInfo } from '../../core/types.ts';
+import type { EngineInfo, RawFinding } from '../../core/types.ts';
 
 const VARIANT_INFO: EngineInfo = {
   id: 'builtin.variant-hunter',
@@ -166,12 +166,44 @@ export class VariantHunter implements Engine {
   }
 
   async run(ctx: ScanContext): Promise<EngineRunResult> {
-    // Variant hunting requires confirmed findings from previous scans; in
-    // standalone mode it runs on probable findings with HTTP evidence.
-    const { findings } = ctx.crawl as unknown as { findings?: import('../../core/types.ts').Finding[] };
-    if (!findings || findings.length === 0) {
-      return { findings: [], detail: 'no seed findings available (run verification first)' };
+    // A2: the orchestrator runs this engine AFTER the verification stage and
+    // injects seeds. No seeds = not applicable, recorded as skipped (never
+    // "ran 0ms" without a reason).
+    const seeds = ctx.seedFindings ?? [];
+    if (seeds.length === 0) {
+      return { findings: [], notExecutedReason: 'no seed findings with HTTP evidence — variant hunting not applicable to this scan' };
     }
-    return { findings: [], detail: 'variant hunting requires confirmed seeds from the verify stage; use huntVariants() directly' };
+
+    const SIBLING_PARAMS = ['id', 'page', 'q', 'redirect', 'url', 'next', 'file', 'path', 'item'];
+    const findings: RawFinding[] = [];
+    let hunts = 0;
+    for (const seed of seeds) {
+      if (ctx.signal.aborted || hunts >= 5) break;
+      const result = await huntVariants(seed, ctx.client, SIBLING_PARAMS, 20);
+      hunts++;
+      for (const v of result.variants.filter((x) => x.matched)) {
+        findings.push({
+          rawId: 'variant-reflection',
+          title: `Variant reflection: seed ${seed.id} matches under ${v.mutation} on ${v.url.slice(0, 100)}`,
+          category: 'A05',
+          severity: 'medium',
+          confidence: 'medium',
+          status: 'probable',
+          asset: ctx.target.origin,
+          locator: v.url.slice(0, 200),
+          evidence: [{
+            kind: 'http',
+            request: { method: 'GET', url: v.url, headers: {} },
+            response: { status: v.status, headers: {}, bodyExcerpt: v.responseSnippet.slice(0, 300) },
+            observation: `Mutation ${v.mutation} of the confirmed seed payload was reflected back (seed: ${seed.id})`,
+          }],
+          explanation: 'A mutation (encoding/case/boundary) of an already-confirmed marker came back in the response — the filter on the original finding is incomplete. Probable: human review of exploitability required.',
+          remediation: 'Apply output encoding contextually for all mutation classes, not just the observed payload form.',
+          references: ['https://owasp.org/Top10/2025/en/A05_2025-Injection/'],
+        });
+      }
+    }
+    const matched = findings.length;
+    return { findings, version: 'builtin', detail: `${hunts} seed(s) hunted, ${matched} variant reflection(s)` };
   }
 }

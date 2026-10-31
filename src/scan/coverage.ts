@@ -229,7 +229,8 @@ function aggregate(tasks: Array<{ status: TaskStatus }>): CategoryCoverageStatus
 
 function legacyVerdict(status: CategoryCoverageStatus, engines: string[]): CategoryCoverage {
   if (status === 'COVERED_WITH_EVIDENCE') return 'covered';
-  if (status === 'PARTIALLY_COVERED') return engines.length > 0 ? 'partial' : 'manual-only';
+  // A4: ran-but-empty categories never claim 'covered'.
+  if (status === 'RAN_CLEAN' || status === 'PARTIALLY_COVERED') return engines.length > 0 ? 'partial' : 'manual-only';
   return 'manual-only';
 }
 
@@ -261,12 +262,20 @@ export function computeCoverage(
     const catInfo = OWASP_CATEGORIES[cat];
     const executedCount = results.filter((r) => r.status === 'AUTOMATED_PASS' || r.status === 'FINDING_DETECTED').length;
     const detectedCount = results.reduce((sum, r) => sum + r.findings, 0);
+    // A4 (newtask): ran-but-empty honesty — a category where every required
+    // task executed cleanly but ZERO findings were attributed must not read
+    // as fully covered. It gets its own state and never the 'covered' verdict.
+    const finalStatus: CategoryCoverageStatus =
+      status === 'COVERED_WITH_EVIDENCE' && detectedCount === 0 ? 'RAN_CLEAN' : status;
+    const cleanNote = finalStatus === 'RAN_CLEAN'
+      ? ' All required tasks ran clean with zero findings (ran-but-empty): absence of findings here is not evidence of absence.'
+      : '';
     const note = `${catInfo.automation} Executed ${executedCount}/${results.length} required ${mode} tasks ` +
-      `(${detectedCount} finding(s) attributed); remaining tasks require manual review or are not applicable to this profile.`;
+      `(${detectedCount} finding(s) attributed); remaining tasks require manual review or are not applicable to this profile.${cleanNote}`;
     reports.push({
       category: cat,
-      verdict: legacyVerdict(status, enginesList),
-      status,
+      verdict: legacyVerdict(finalStatus, enginesList),
+      status: finalStatus,
       tasks: results,
       engines: enginesList,
       note,

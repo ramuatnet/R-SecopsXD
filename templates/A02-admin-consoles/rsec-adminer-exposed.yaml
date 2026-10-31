@@ -1,0 +1,29 @@
+id: rsec-adminer-exposed
+info:
+  name: Adminer DB manager exposed
+  author: r-secopsxd
+  severity: high
+  description: Adminer DB manager exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-650
+  tags: adminer,db,rsec
+# source: WSTG-CONF; CWE-650
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/adminer.php"
+      - "{{BaseURL}}/adminer/"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Adminer"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

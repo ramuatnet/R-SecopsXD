@@ -1,0 +1,29 @@
+id: rsec-grafana-presence
+info:
+  name: Grafana login exposed
+  author: r-secopsxd
+  severity: info
+  description: Grafana login exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-650
+  tags: grafana,dashboard,rsec
+# source: WSTG-CONF; CWE-650
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/login"
+      - "{{BaseURL}}/"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Grafana"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

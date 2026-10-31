@@ -1,0 +1,30 @@
+id: rsec-graphql-playground
+info:
+  name: GraphiQL IDE exposed
+  author: r-secopsxd
+  severity: medium
+  description: GraphiQL IDE exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-api-security/
+  classification:
+    cwe-id: CWE-200
+  tags: graphql,playground,rsec
+# source: OWASP API Security; CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/graphiql"
+      - "{{BaseURL}}/playground"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "GraphiQL"
+          - "graphiql"
+        condition: or
+      - type: status
+        part: status
+        status:
+          - 200

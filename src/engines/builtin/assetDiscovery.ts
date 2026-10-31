@@ -37,13 +37,16 @@ const INFO: EngineInfo = {
   targetKinds: ['webapp'],
 };
 
-const CT_TIMEOUT_MS = 15_000;
+const CT_TIMEOUT_MS = 8_000;
 const CT_MAX_NAMES = 50;
 const RESOLVE_MAX = 30;
 const NS_AXFR_MAX = 2;
 const AXFR_TIMEOUT_MS = 5000;
 const CYMRU_TIMEOUT_MS = 6000;
 const WHOIS_CYMRU_HOST = 'whois.cymru.com';
+const DNS_SOURCE_CAP_MS = 6_000;
+// A3: fallback resolvers tried when the OS resolver denies or times out.
+const FALLBACK_RESOLVERS = ['1.1.1.1', '8.8.8.8', '9.9.9.9'];
 
 function isIpLiteral(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
@@ -73,6 +76,26 @@ function dnsTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
     const t = setTimeout(() => resolve(fallback), ms);
     p.then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(fallback); });
   });
+}
+
+/**
+ * A3: OS resolver first (hosts file + configured DNS); on denial/timeout fall
+ * back to public resolvers so one broken resolver no longer costs the whole
+ * source. Every hop is hard-capped.
+ */
+export async function resolveWithFallback(hostname: string): Promise<Array<{ address: string; family: number }>> {
+  const dns = await import('node:dns/promises');
+  const primary = await dnsTimeout(dns.lookup(hostname, { all: true }).catch(() => [] as Array<{ address: string; family: number }>), 4_000, [] as Array<{ address: string; family: number }>);
+  if (primary.length > 0) return primary;
+  for (const server of FALLBACK_RESOLVERS) {
+    const resolver = new dns.Resolver({ timeout: 3000, tries: 1 });
+    resolver.setServers([server]);
+    const v4 = await dnsTimeout(resolver.resolve4(hostname).catch(() => [] as string[]), 3_500, [] as string[]);
+    if (v4.length > 0) return v4.map((a) => ({ address: a, family: 4 as const }));
+    const v6 = await dnsTimeout(resolver.resolve6(hostname).catch(() => [] as string[]), 3_500, [] as string[]);
+    if (v6.length > 0) return v6.map((a) => ({ address: a, family: 6 as const }));
+  }
+  return [];
 }
 
 // ---------- Certificate Transparency via crt.sh ----------
@@ -202,8 +225,34 @@ export class AssetDiscoveryEngine implements Engine {
     }
     const findings: RawFinding[] = [];
 
+    const originUrl = new URL(ctx.target.origin);
+    const targetPort = Number(originUrl.port) || (originUrl.protocol === 'https:' ? 443 : 80);
+
+    // A3: all independent sources run in parallel, each hard-capped, so a
+    // single unreachable source can no longer dominate the scan wall-clock.
+    const bucketCandidates = [...new Set([
+      domain, domain.replace(/\./g, '-'), domain.replace(/\./g, ''),
+      `www-${domain.replace(/\./g, '-')}`, `${domain.replace(/\./g, '-')}-assets`, `${domain.replace(/\./g, '-')}-backups`,
+    ])].slice(0, 6);
+
+    const [dnsAssets, ctNames, sanRecon, attribution, buckets] = await Promise.all([
+      dnsTimeout(discoverDnsAssets(domain), DNS_SOURCE_CAP_MS, [] as Awaited<ReturnType<typeof discoverDnsAssets>>),
+      fetchCtNames(domain),
+      (originUrl.protocol === 'https:' || targetPort === 443)
+        ? httpRecon(hostname, targetPort, hostname, true)
+        : Promise.resolve(undefined),
+      (async () => {
+        const ips = await resolveWithFallback(hostname);
+        const publicIps = [...new Set(ips.map((a) => a.address))].filter((ip) => !isPrivateIp(ip)).slice(0, 4);
+        const results = await Promise.allSettled(publicIps.map((ip) => whoisIpAttribution(ip)));
+        return { publicIps, results };
+      })(),
+      ctx.mode === 'active'
+        ? dnsTimeout(probeCloudStorage(bucketCandidates), 8_000, [] as Awaited<ReturnType<typeof probeCloudStorage>>)
+        : Promise.resolve([] as Awaited<ReturnType<typeof probeCloudStorage>>),
+    ]);
+
     // ---- 1. DNS records ----
-    const dnsAssets = await dnsTimeout(discoverDnsAssets(domain), 10_000, []);
     if (dnsAssets.length > 0) {
       findings.push({
         rawId: 'asset-dns-records',
@@ -224,18 +273,16 @@ export class AssetDiscoveryEngine implements Engine {
         references: [],
       });
     } else {
-      notes.push('no DNS records enumerable (resolver denied or timed out)');
+      notes.push('no DNS records enumerable (resolver denied; fallback resolvers also failed or timed out)');
     }
 
-    // ---- 2. Certificate Transparency ----
-    const ctNames = await fetchCtNames(domain);
+    // ---- 2. Certificate Transparency + subdomain liveness ----
     if (ctNames !== undefined && ctNames.length > 0) {
-      // ---- 3. liveness of discovered subdomains (bounded) ----
-      const live: string[] = [];
       const dns = await import('node:dns/promises');
+      const live: string[] = [];
       await Promise.allSettled(ctNames.slice(0, RESOLVE_MAX).map(async (name) => {
         const addrs = await dnsTimeout(dns.lookup(name).catch(() => undefined), 2_500, undefined);
-        if (addrs !== undefined) live.push(`${name} → ${addrs.address}`);
+        if (addrs !== undefined) live.push(`${name} \u2192 ${addrs.address}`);
       }));
       findings.push({
         rawId: 'asset-ct-logs',
@@ -249,9 +296,9 @@ export class AssetDiscoveryEngine implements Engine {
         evidence: [{
           kind: 'process',
           command: `CT log search crt.sh q=%.${domain}`,
-          observation: `names: ${ctNames.slice(0, 15).join(', ')}${ctNames.length > 15 ? ` …(+${ctNames.length - 15})` : ''}; resolving: ${live.slice(0, 10).join(', ') || 'none'}`,
+          observation: `names: ${ctNames.slice(0, 15).join(', ')}${ctNames.length > 15 ? ` \u2026(+${ctNames.length - 15})` : ''}; resolving: ${live.slice(0, 10).join(', ') || 'none'}`,
         }],
-        explanation: 'Hostnames issued public TLS certificates for this domain space. Unfamiliar entries may be forgotten (shadow) infrastructure. Discovered assets are listed only — they are not scanned; register them as targets to assess them.',
+        explanation: 'Hostnames issued public TLS certificates for this domain space. Unfamiliar entries may be forgotten (shadow) infrastructure. Discovered assets are listed only \u2014 they are not scanned; register them as targets to assess them.',
         remediation: 'Review certificate issuance: revoke/expire certificates for decommissioned hosts and ensure new issuance follows the change process.',
         references: ['https://certificate.transparency.dev/'],
       });
@@ -259,44 +306,35 @@ export class AssetDiscoveryEngine implements Engine {
       notes.push('CT log search unavailable or empty (crt.sh unreachable or no certs)');
     }
 
-    // ---- 4. certificate SANs of the target itself ----
-    const originUrl = new URL(ctx.target.origin);
-    const targetPort = Number(originUrl.port) || (originUrl.protocol === 'https:' ? 443 : 80);
-    if (originUrl.protocol === 'https:' || targetPort === 443) {
-      const recon = await httpRecon(hostname, targetPort, hostname, true);
-      if (recon.open && recon.sans.length > 0) {
-        findings.push({
-          rawId: 'asset-cert-sans',
-          title: `Target TLS certificate covers ${recon.sans.length} SAN name(s)`,
-          category: 'A01',
-          severity: 'info',
-          confidence: 'high',
-          status: 'informational',
-          asset: domain,
-          locator: hostname,
-          evidence: [{
-            kind: 'process',
-            command: `TLS handshake ${hostname}:${targetPort}`,
-            observation: `CN=${recon.cn ?? 'n/a'} issuer=${recon.issuer ?? 'n/a'} SANs=${recon.sans.slice(0, 12).join(', ')}`,
-          }],
-          explanation: 'Additional hostnames covered by the same certificate — part of the same deployment surface.',
-          remediation: 'No action; inventory context.',
-          references: [],
-        });
-      }
+    // ---- 3. certificate SANs of the target itself ----
+    if (sanRecon !== undefined && sanRecon.open && sanRecon.sans.length > 0) {
+      findings.push({
+        rawId: 'asset-cert-sans',
+        title: `Target TLS certificate covers ${sanRecon.sans.length} SAN name(s)`,
+        category: 'A01',
+        severity: 'info',
+        confidence: 'high',
+        status: 'informational',
+        asset: domain,
+        locator: hostname,
+        evidence: [{
+          kind: 'process',
+          command: `TLS handshake ${hostname}:${targetPort}`,
+          observation: `CN=${sanRecon.cn ?? 'n/a'} issuer=${sanRecon.issuer ?? 'n/a'} SANs=${sanRecon.sans.slice(0, 12).join(', ')}`,
+        }],
+        explanation: 'Additional hostnames covered by the same certificate \u2014 part of the same deployment surface.',
+        remediation: 'No action; inventory context.',
+        references: [],
+      });
     }
 
-    // ---- 5. IP attribution (passive; public IPs only) ----
-    const dns2 = await import('node:dns/promises');
-    const targetIps = await dnsTimeout(dns2.lookup(hostname, { all: true }).catch(() => [] as Array<{ address: string; family: number }>), 5_000, [] as Array<{ address: string; family: number }>);
-    const publicIps = [...new Set(targetIps.map((a) => a.address))].filter((ip) => !isPrivateIp(ip)).slice(0, 4);
-    if (publicIps.length > 0) {
-      const attributions = await Promise.allSettled(publicIps.map((ip) => whoisIpAttribution(ip)));
+    // ---- 4. IP attribution (passive; public IPs only) ----
+    {
       const lines: string[] = [];
-      for (let i = 0; i < publicIps.length; i++) {
-        const a = attributions[i];
+      for (let i = 0; i < attribution.publicIps.length; i++) {
+        const a = attribution.results[i];
         if (a?.status === 'fulfilled' && a.value !== undefined) {
-          lines.push(`${publicIps[i]} → ${a.value.asn} | ${a.value.country} | ${a.value.owner}`);
+          lines.push(`${attribution.publicIps[i]} \u2192 ${a.value.asn} | ${a.value.country} | ${a.value.owner}`);
         }
       }
       if (lines.length > 0) {
@@ -308,34 +346,35 @@ export class AssetDiscoveryEngine implements Engine {
           confidence: 'high',
           status: 'informational',
           asset: domain,
-          locator: publicIps[0]!,
+          locator: attribution.publicIps[0]!,
           evidence: [{
             kind: 'process',
-            command: `Team Cymru IP→ASN whois for ${publicIps.join(', ')}`,
+            command: `Team Cymru IP\u2192ASN whois for ${attribution.publicIps.join(', ')}`,
             observation: lines.join('; ').slice(0, 400),
           }],
           explanation: 'ASN/owner/country for the target IPs (cloud provider vs on-prem). Useful for asset ownership attribution and cloud-config correlation.',
           remediation: 'No action; inventory context.',
           references: ['https://www.team-cymru.com/ip-asn-mapping'],
         });
-      } else {
-        notes.push('IP attribution unavailable (whois service unreachable)');
+      } else if (attribution.publicIps.length > 0) {
+        notes.push('IP attribution unavailable (whois service unreachable from this network)');
       }
     }
 
-    // ---- 6. AXFR zone transfer (active only) ----
+    // ---- 5. AXFR zone transfer (active only; needs NS from the DNS source) ----
     if (ctx.mode === 'active') {
       const nsRecords = dnsAssets.filter((a) => a.type === 'nameserver').slice(0, NS_AXFR_MAX);
       if (nsRecords.length === 0) {
         notes.push('AXFR skipped: no NS records discovered');
       } else {
-        for (const ns of nsRecords) {
-          const nsHost = ns.value.replace(/\.$/, '');
-          const r = await tryAxfr(nsHost, domain);
-          if (r.transferred) {
+        const axfrResults = await Promise.allSettled(nsRecords.map((ns) => tryAxfr(ns.value.replace(/\.$/, ''), domain)));
+        for (let i = 0; i < nsRecords.length; i++) {
+          const r = axfrResults[i];
+          if (r?.status === 'fulfilled' && r.value.transferred) {
+            const nsHost = nsRecords[i]!.value.replace(/\.$/, '');
             findings.push({
               rawId: 'zone-transfer-possible',
-              title: `DNS zone transfer (AXFR) succeeded against ${nsHost} — full zone disclosed`,
+              title: `DNS zone transfer (AXFR) succeeded against ${nsHost} \u2014 full zone disclosed`,
               category: 'A02',
               severity: 'high',
               confidence: 'high',
@@ -345,22 +384,18 @@ export class AssetDiscoveryEngine implements Engine {
               evidence: [{
                 kind: 'process',
                 command: `AXFR ${domain} @${nsHost}`,
-                observation: `rcode=0, ${r.records} record(s) transferred`,
+                observation: `rcode=0, ${r.value.records} record(s) transferred`,
               }],
               explanation: 'The nameserver answers AXFR requests without authentication, disclosing the entire zone (all hostnames) to anyone.',
               remediation: 'Disable AXFR for unauthenticated clients; restrict zone transfers to designated secondaries via TSIG.',
               references: ['https://cwe.mitre.org/data/definitions/200.html'],
             });
           }
-          // refused/failed AXFR is the healthy case — recorded in detail only, never a finding
+          // refused/failed AXFR is the healthy case \u2014 recorded in detail only, never a finding
         }
       }
 
-      // ---- 7. cloud bucket probes (active only; GETs target cloud providers) ----
-      const base = domain.replace(/\./g, '-');
-      const nodot = domain.replace(/\./g, '');
-      const candidates = [...new Set([domain, base, nodot, `www-${base}`, `${base}-assets`, `${base}-backups`])].slice(0, 6);
-      const buckets = await dnsTimeout(probeCloudStorage(candidates), 20_000, []);
+      // ---- 6. cloud bucket probes (active only; GETs target cloud providers) ----
       for (const b of buckets) {
         findings.push({
           rawId: 'cloud-bucket-public',

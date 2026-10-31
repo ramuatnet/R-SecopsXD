@@ -35,6 +35,10 @@ export class ReflectionProbeEngine implements Engine {
   async run(ctx: ScanContext): Promise<EngineRunResult> {
     const findings: RawFinding[] = [];
     const pages = ctx.crawl?.pages ?? [];
+    // A2: no crawl surface = not applicable, recorded honestly (never ran-0ms).
+    if (pages.length === 0) {
+      return { findings: [], notExecutedReason: 'no crawl surface (empty corpus) — reflection probe not applicable' };
+    }
     const tagMarker = `"><${REFLECTION_MARKER}>`;
 
     const seen = new Set<string>();

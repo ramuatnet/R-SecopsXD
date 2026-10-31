@@ -25,7 +25,7 @@ const INFO: EngineInfo = {
   targetKinds: ['webapp'],
 };
 
-const MAX_BUNDLES = 8;
+const MAX_BUNDLES = 16;
 const MAX_ENDPOINTS = 60;
 
 /** Route strings from fetch/axios/url usage plus multi-segment API-path literals. */
@@ -66,9 +66,14 @@ export class EndpointDiscoveryEngine implements Engine {
   async run(ctx: ScanContext): Promise<EngineRunResult> {
     const corpus = ctx.crawl ?? { pages: [], robots: { disallow: [], fetched: false } };
     ctx.crawl = corpus;
+    // A2/A5: no crawl surface = not applicable (honest skip, not ran-0ms).
+    if (corpus.pages.length === 0) {
+      return { findings: [], notExecutedReason: 'no crawl surface (empty corpus) — endpoint discovery not applicable' };
+    }
     const originHost = new URL(ctx.target.origin).hostname;
 
-    // Collect same-origin bundles from crawled pages (bounded).
+    // A5: collect same-origin bundles from ALL crawled pages. Accept .js/.mjs
+    // and extension-less module scripts (bundlers often serve without extension).
     const bundles = new Set<string>();
     for (const page of corpus.pages) {
       const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
@@ -77,7 +82,7 @@ export class EndpointDiscoveryEngine implements Engine {
         try {
           const u = new URL(m[1]!, page.url);
           if (u.hostname !== originHost) continue;
-          if (u.pathname.endsWith('.js')) bundles.add(u.toString());
+          if (/\.(js|mjs)$/i.test(u.pathname) || !/\.[a-z0-9]{2,5}$/i.test(u.pathname)) bundles.add(u.toString());
         } catch { /* skip malformed */ }
       }
     }

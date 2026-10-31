@@ -18,7 +18,9 @@
     "test:e2e": "node --test \"test/e2e/*.test.ts\"",
     "fixture:vuln": "node fixtures/vuln-app/server.cjs",
     "fixture:clean": "node fixtures/hardened-app/server.cjs",
-    "demo": "node scripts/demo.ts"
+    "demo": "node scripts/demo.ts",
+    "lint:templates": "node scripts/lint-templates.ts",
+    "canary": "node scripts/canary-scan.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

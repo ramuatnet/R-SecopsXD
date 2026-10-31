@@ -155,3 +155,46 @@ No category regressed to a higher claim (enforced by the no-inflation test).
   approval decision (scope model preserved). Short-circuits cleanly for IP-literal/localhost targets.
 - New tasks: A01-T14 (asset discovery), A01-T15 (tech-stack identification), A02-T10 (AXFR/buckets).
 - Suite: **200/200**
+
+## newtask.md Phase A + B: validation fixes + in-house Nuclei pack (2026-10-31)
+
+Baseline: scan 160fb8bf (TNEB standard-active) — 5 findings, zero vulnerability-class results.
+
+**Phase A (V1–V8 from the review):**
+- **A1/V1** port results surface per-port (`port-open`, info/medium/high exposure classes —
+  DB/remote-access/cluster APIs at the edge = high). Plus TWO root-cause bugs found by re-scanning:
+  - `normalizeLocator` stripped `:port` from `ip:port` locators ("file line number" regex) — every
+    port finding on one host collapsed into one dedupe fingerprint. Ports now keep their port.
+  - `httpRecon` reported `open:true` on SYN-ACK-with-zero-bytes; TNEB's edge intermittently
+    SYN-ACKs (and answers HTTP block pages on) every probed port. Zero-byte answers no longer count;
+    identical responses across ≥5 ports are suppressed as `port-scan-interference` (middlebox
+    detection) instead of flooding the report. Live proof: TNEB honestly shows 443 (TLS) + 80
+    (HTTP 307) — the earlier "9200/Elasticsearch high" was a middlebox artifact (direct probe
+    confirms closed).
+- **A2/V2+V3** verification stage added before variant-hunter (seeds verified, promotions audited);
+  variant-hunter injects seeds and hunts mutations (previously a no-op stub); reflection/redirect/
+  endpoint-discovery record `notExecutedReason` on empty surface instead of "ran 0ms".
+- **A3/V5** asset-discovery sources run in parallel with hard caps (≤8s), public-resolver fallback
+  (1.1.1.1/8.8.8.8/9.9.9.9) when the OS resolver denies.
+- **A4/V7** coverage adds `RAN_CLEAN`: all-tasks-executed-but-zero-findings categories never read
+  "covered" and the note says so explicitly.
+- **A5/V4** endpoint-discovery scans all crawled pages for bundles, accepts extension-less module
+  scripts, cap 8→16.
+- **V6** honest: authenticated-probe records the exact skip reason (needs a credential profile).
+
+**Phase B (N1–N10) — in-house Nuclei, no clone:**
+- `templates/` pack: 41 curated templates across A01-sensitive-exposure, A02-admin-consoles,
+  A01-api-surface, A02-cors, A07-default-credentials, A10-verbose-errors, each with `# source:`
+  citation (N9) and CWE classification; `index.json` maps template → required capability.
+- Runner: adapter executes ONLY the in-house pack (`-t` per gated template), capability-gated from
+  the crawl corpus (N5 — graphql templates need observed GraphQL surface); `-duc -jsonl -silent`,
+  deny-listed tags, rate limits unchanged.
+- `npm run lint:templates` (N3/N7/N9): required keys, unique ids, source citation, matcher
+  type+part, ≤3 requests, DSL allowlist (no `code:`/javascript, payload cap 40), index consistency.
+- Binary integrity (N6): `templates/nuclei-pin.json`; version+SHA-256 verified at startup, mismatch
+  = fail closed. Canary (N10): `npm run canary` — parser canary always; binary execution canary
+  only when the pinned binary + fixture are actually present (honest skip).
+- Nuclei binary is not installed on this host — the adapter reports unavailable honestly; every
+  mechanism above is test-covered so the pack activates the moment the pinned binary lands.
+
+Suite: **212/212** (`npm run lint:templates` + `npm run canary` green). Server re-validated on TNEB.

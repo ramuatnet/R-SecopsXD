@@ -1,0 +1,28 @@
+id: rsec-tomcat-default-page
+info:
+  name: Tomcat default page (uncustomized deployment)
+  author: r-secopsxd
+  severity: info
+  description: Tomcat default page (uncustomized deployment) - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/README
+  classification:
+    cwe-id: CWE-1188
+  tags: tomcat,default,rsec
+# source: WSTG-INFO; CWE-1188
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Apache Tomcat/"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

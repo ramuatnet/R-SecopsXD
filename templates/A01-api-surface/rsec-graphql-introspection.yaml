@@ -1,0 +1,34 @@
+id: rsec-graphql-introspection
+info:
+  name: GraphQL introspection enabled
+  author: r-secopsxd
+  severity: high
+  description: GraphQL introspection enabled - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-api-security/
+  classification:
+    cwe-id: CWE-200
+  tags: graphql,introspection,rsec
+# source: OWASP API Security; CWE-200
+
+http:
+  - method: POST
+    path:
+      - "{{BaseURL}}/graphql"
+      - "{{BaseURL}}/api/graphql"
+      - "{{BaseURL}}/graphiql"
+    headers:
+      Content-Type: application/json
+    body: "{\"query\":\"{ __schema { types { name } } }\"}"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "__schema"
+          - "types"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

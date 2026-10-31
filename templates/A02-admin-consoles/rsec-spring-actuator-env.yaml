@@ -1,0 +1,29 @@
+id: rsec-spring-actuator-env
+info:
+  name: Spring Boot Actuator env endpoint exposed
+  author: r-secopsxd
+  severity: high
+  description: Spring Boot Actuator env endpoint exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-200
+  tags: spring,actuator,rsec
+# source: WSTG-CONF; CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/actuator/env"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - ""propertySources""
+          - "property"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

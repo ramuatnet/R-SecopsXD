@@ -1,0 +1,216 @@
+{
+  "schema": "rsec-template-index/1",
+  "templates": [
+    {
+      "file": "A01-sensitive-exposure/rsec-git-config-exposure.yaml",
+      "id": "rsec-git-config-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-git-head-exposure.yaml",
+      "id": "rsec-git-head-exposure",
+      "severity": "medium"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-env-file-exposure.yaml",
+      "id": "rsec-env-file-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-env-backup-exposure.yaml",
+      "id": "rsec-env-backup-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-aws-credentials-exposure.yaml",
+      "id": "rsec-aws-credentials-exposure",
+      "severity": "critical"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-gcp-key-exposure.yaml",
+      "id": "rsec-gcp-key-exposure",
+      "severity": "critical"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-database-dump-exposure.yaml",
+      "id": "rsec-database-dump-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-backup-archive-exposure.yaml",
+      "id": "rsec-backup-archive-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-svn-entries-exposure.yaml",
+      "id": "rsec-svn-entries-exposure",
+      "severity": "medium"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-idea-workspace-exposure.yaml",
+      "id": "rsec-idea-workspace-exposure",
+      "severity": "medium"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-ds-store-exposure.yaml",
+      "id": "rsec-ds-store-exposure",
+      "severity": "low"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-htaccess-exposure.yaml",
+      "id": "rsec-htaccess-exposure",
+      "severity": "medium"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-elmah-exposure.yaml",
+      "id": "rsec-elmah-exposure",
+      "severity": "high"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-source-map-exposure.yaml",
+      "id": "rsec-source-map-exposure",
+      "severity": "medium"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-composer-json-exposure.yaml",
+      "id": "rsec-composer-json-exposure",
+      "severity": "info"
+    },
+    {
+      "file": "A01-sensitive-exposure/rsec-package-json-exposure.yaml",
+      "id": "rsec-package-json-exposure",
+      "severity": "info"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-tomcat-manager-unauth.yaml",
+      "id": "rsec-tomcat-manager-unauth",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-tomcat-manager-present.yaml",
+      "id": "rsec-tomcat-manager-present",
+      "severity": "info"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-tomcat-default-page.yaml",
+      "id": "rsec-tomcat-default-page",
+      "severity": "info"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-jboss-jmx-console.yaml",
+      "id": "rsec-jboss-jmx-console",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-spring-actuator.yaml",
+      "id": "rsec-spring-actuator",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-spring-actuator-env.yaml",
+      "id": "rsec-spring-actuator-env",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-spring-actuator-heapdump.yaml",
+      "id": "rsec-spring-actuator-heapdump",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-spring-gateway-routes.yaml",
+      "id": "rsec-spring-gateway-routes",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-jenkins-presence.yaml",
+      "id": "rsec-jenkins-presence",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-grafana-presence.yaml",
+      "id": "rsec-grafana-presence",
+      "severity": "info"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-kibana-exposed.yaml",
+      "id": "rsec-kibana-exposed",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-phpmyadmin-exposed.yaml",
+      "id": "rsec-phpmyadmin-exposed",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-adminer-exposed.yaml",
+      "id": "rsec-adminer-exposed",
+      "severity": "high"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-apache-server-status.yaml",
+      "id": "rsec-apache-server-status",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-prometheus-metrics.yaml",
+      "id": "rsec-prometheus-metrics",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-admin-consoles/rsec-nginx-autoindex.yaml",
+      "id": "rsec-nginx-autoindex",
+      "severity": "low"
+    },
+    {
+      "file": "A01-api-surface/rsec-graphql-introspection.yaml",
+      "id": "rsec-graphql-introspection",
+      "severity": "high",
+      "requires": [
+        "graphql"
+      ]
+    },
+    {
+      "file": "A01-api-surface/rsec-graphql-playground.yaml",
+      "id": "rsec-graphql-playground",
+      "severity": "medium",
+      "requires": [
+        "graphql"
+      ]
+    },
+    {
+      "file": "A01-api-surface/rsec-openapi-spec-exposed.yaml",
+      "id": "rsec-openapi-spec-exposed",
+      "severity": "info"
+    },
+    {
+      "file": "A10-verbose-errors/rsec-java-stacktrace.yaml",
+      "id": "rsec-java-stacktrace",
+      "severity": "medium"
+    },
+    {
+      "file": "A10-verbose-errors/rsec-aspnet-stacktrace.yaml",
+      "id": "rsec-aspnet-stacktrace",
+      "severity": "medium"
+    },
+    {
+      "file": "A10-verbose-errors/rsec-php-error-disclosure.yaml",
+      "id": "rsec-php-error-disclosure",
+      "severity": "medium"
+    },
+    {
+      "file": "A02-cors/rsec-cors-reflect-credentials.yaml",
+      "id": "rsec-cors-reflect-credentials",
+      "severity": "high"
+    },
+    {
+      "file": "A02-cors/rsec-cors-reflect-any-origin.yaml",
+      "id": "rsec-cors-reflect-any-origin",
+      "severity": "medium"
+    },
+    {
+      "file": "A07-default-credentials/rsec-default-credential-page.yaml",
+      "id": "rsec-default-credential-page",
+      "severity": "info"
+    }
+  ]
+}

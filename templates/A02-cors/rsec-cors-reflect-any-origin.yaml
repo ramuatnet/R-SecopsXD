@@ -1,0 +1,30 @@
+id: rsec-cors-reflect-any-origin
+info:
+  name: CORS reflects arbitrary origin
+  author: r-secopsxd
+  severity: medium
+  description: CORS reflects arbitrary origin - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side/Testing_for_CORS
+  classification:
+    cwe-id: CWE-942
+  tags: cors,rsec
+# source: WSTG-CLNT; Testing for CORS
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    headers:
+      Origin: https://evil.example
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: header
+        words:
+          - "access-control-allow-origin: https://evil.example"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

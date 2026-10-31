@@ -1,0 +1,10 @@
+{
+  "schema": "rsec-nuclei-pin/1",
+  "version": "",
+  "sha256": {
+    "win32": "",
+    "linux": "",
+    "darwin": ""
+  },
+  "note": "Fill version and sha256 for the deployed platform at install time. Empty version = integrity check reports 'unpinned' honestly instead of failing. The adapter fails closed on a version or hash mismatch."
+}

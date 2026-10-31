@@ -1,0 +1,29 @@
+id: rsec-elmah-exposure
+info:
+  name: Exposed ELMAH error log
+  author: r-secopsxd
+  severity: high
+  description: Exposed ELMAH error log - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,aspnet,logs,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/elmah.axd"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "ELMAH"
+          - "Error Log"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

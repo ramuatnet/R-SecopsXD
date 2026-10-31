@@ -160,7 +160,8 @@ test('every finding carries the complete model (AC16)', () => {
     assert.ok(f.remediation.length > 20);
     assert.ok(f.detectedAt);
     assert.ok(f.provenance.length > 0 && f.provenance[0]!.engine);
-    assert.ok(['confirmed', 'probable', 'informational'].includes(f.status));
+    // A2 added an audit-backed verification stage: rejected seeds read false_positive.
+    assert.ok(['confirmed', 'probable', 'informational', 'false_positive'].includes(f.status));
   }
 });
 

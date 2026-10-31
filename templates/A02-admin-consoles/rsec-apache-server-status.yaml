@@ -1,0 +1,28 @@
+id: rsec-apache-server-status
+info:
+  name: Apache server-status exposed
+  author: r-secopsxd
+  severity: medium
+  description: Apache server-status exposed - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-200
+  tags: apache,mod_status,rsec
+# source: WSTG-CONF; CWE-200
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/server-status"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Apache Server Status"
+        condition: and
+      - type: status
+        part: status
+        status:
+          - 200

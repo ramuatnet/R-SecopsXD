@@ -144,6 +144,7 @@ export type CategoryCoverage = 'covered' | 'partial' | 'manual-only';
 /** Evidence-based coverage statuses (automation program Phase 13). */
 export type CategoryCoverageStatus =
   | 'COVERED_WITH_EVIDENCE'
+  | 'RAN_CLEAN'
   | 'PARTIALLY_COVERED'
   | 'MANUAL_REVIEW_REQUIRED'
   | 'NOT_ASSESSED'

@@ -1,0 +1,33 @@
+id: rsec-backup-archive-exposure
+info:
+  name: Exposed backup archives
+  author: r-secopsxd
+  severity: high
+  description: Exposed backup archives - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,backup,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/backup.zip"
+      - "{{BaseURL}}/backup.tar.gz"
+      - "{{BaseURL}}/site.tar.gz"
+      - "{{BaseURL}}/www.zip"
+      - "{{BaseURL}}/web.bak"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "PK"
+          - "\x1f\x8b"
+        condition: or
+      - type: status
+        part: status
+        status:
+          - 200

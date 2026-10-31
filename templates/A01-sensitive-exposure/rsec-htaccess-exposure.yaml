@@ -1,0 +1,30 @@
+id: rsec-htaccess-exposure
+info:
+  name: Exposed .htaccess
+  author: r-secopsxd
+  severity: medium
+  description: Exposed .htaccess - curated in-house check derived from the cited source.
+  reference:
+    - https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README
+  classification:
+    cwe-id: CWE-538
+  tags: exposure,apache,rsec
+# source: WSTG-CONF; CWE-538
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.htaccess"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "RewriteRule"
+          - "Options"
+          - "AuthType"
+        condition: or
+      - type: status
+        part: status
+        status:
+          - 200
