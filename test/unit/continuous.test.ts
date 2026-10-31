@@ -86,7 +86,7 @@ test('T9.2 webhook alerting: payload delivered with findings and score', async (
         status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
         engines: [], coverage: [], stats: {
           findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-          findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, untested: 0 },
+          findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, untested: 0 , rejected_by_verification: 0 },
           totalFindings: fps.length, requestsSent: 0, requestsBlocked: 0,
         },
       });

@@ -201,8 +201,10 @@ export function applyVerification(
     audit('finding.promoted', { findingId: f.id, from, to: 'confirmed', rationale: report.rationale });
     return { findingId: f.id, from, to: 'confirmed', audited: true };
   }
-  if (report.verdict === 'rejected' && f.status !== 'false_positive') {
-    f.status = 'false_positive';
+  // I2 (hardtask.md): machine rejections are a distinct status from human
+  // false_positive triage — reporting must not conflate them.
+  if (report.verdict === 'rejected' && f.status !== 'rejected_by_verification') {
+    f.status = 'rejected_by_verification';
     audit('finding.rejected', { findingId: f.id, from, to: 'false_positive', rationale: report.rationale });
     return { findingId: f.id, from, to: 'false_positive', audited: true };
   }
@@ -225,4 +227,26 @@ export function toRawFindingShape(f: Finding): RawFinding {
     asset: f.asset, locator: f.locator, evidence: f.evidence,
     explanation: f.explanation, remediation: f.remediation, references: f.references,
   };
+}
+
+// ---------- I1/I17 (hardtask.md): recall floor for auto-rejections ----------
+
+/**
+ * Findings auto-rejected by verification whose rawId matches a ground-truth
+ * pattern — a planted true positive must NEVER be auto-rejected (I17). The
+ * e2e harness asserts this is empty on every fixture scan.
+ */
+export function findTruePositiveRejections(findings: Array<{ status?: string; title?: string; provenance?: Array<{ rawId?: string }> }>, truthRawIdPatterns: string[]): Array<{ title: string | undefined; rawId: string }> {
+  const out: Array<{ title: string | undefined; rawId: string }> = [];
+  for (const f of findings) {
+    if (f.status !== 'rejected_by_verification') continue;
+    for (const p of f.provenance ?? []) {
+      const rawId = p.rawId ?? '';
+      if (truthRawIdPatterns.some((pat) => rawId.includes(pat))) {
+        out.push({ title: f.title, rawId });
+        break;
+      }
+    }
+  }
+  return out;
 }

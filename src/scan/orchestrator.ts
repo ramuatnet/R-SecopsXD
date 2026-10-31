@@ -40,7 +40,7 @@ import { log } from '../logging.ts';
 function emptyStats(): ScanStats {
   return {
     findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, untested: 0 },
+    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0 },
     totalFindings: 0,
     requestsSent: 0,
     requestsBlocked: 0,
@@ -186,7 +186,7 @@ export class Orchestrator {
           coverage: result.coverage,
           stats: {
             findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, untested: 0 },
+            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0 },
             totalFindings: result.findings.length,
             requestsSent: result.stats.sent,
             requestsBlocked: result.stats.blocked,
@@ -352,12 +352,16 @@ export class Orchestrator {
           record('skipped', 'no HTTP-evidence findings to seed variant hunting — not applicable to this scan');
         } else {
           // Verify seeds first (bounded) — promotion/refusal is audited.
+          // I1 (hardtask.md): auto-rejections are counted and surfaced; the
+          // recall floor (I17) asserts in e2e that planted TPs are never here.
+          let rejections = 0;
           for (const seed of seeds) {
             if (signal.aborted) break;
             try {
               const report = await verifyByType(seed, client);
               applyVerification(findings, report, (action, details) =>
                 this.db.audit({ actor: 'system', action, details: { scanId, ...details } }));
+              if (report.verdict === 'rejected') rejections++;
             } catch { /* verification is best-effort; seeds remain probable */ }
           }
           const engine = this.registry.create('builtin.variant-hunter', profile.maxCrawlPages);
@@ -379,7 +383,7 @@ export class Orchestrator {
               };
               try {
                 const result = await withTimeout(engine.run(vCtx), this.config.engineTimeoutMs, 'builtin.variant-hunter', signal);
-                record('ran', result.detail ?? '', result.findings.length);
+                record('ran', `${result.detail ?? ''}; ${rejections} seed(s) auto-rejected by verification (rejected_by_verification, not human false_positive)`, result.findings.length);
                 for (const raw of result.findings) {
                   findings.push(normalizeFinding(raw, {
                     target, engineId: 'builtin.variant-hunter', engineVersion: result.version ?? 'builtin',

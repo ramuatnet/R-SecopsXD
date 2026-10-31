@@ -10,6 +10,7 @@
  * violation — CI gate.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { packDigest } from './packDigest.ts';
 import { join } from 'node:path';
 
 export interface Violation { file: string; rule: string; detail: string; }
@@ -97,6 +98,18 @@ export function lintTemplates(dir: string, violations: Violation[] = []): Violat
     }
   } catch (e) {
     violations.push({ file: 'index.json', rule: 'index-parse', detail: e instanceof Error ? e.message : String(e) });
+  }
+
+  // J3 (hardtask.md): the pinned pack digest must match the pack contents —
+  // a template change without a pack-version bump commit fails the gate.
+  try {
+    const actual = packDigest(dir);
+    const pin = JSON.parse(readFileSync(join(dir, 'pack-version.json'), 'utf8')) as { version: number; digest: string };
+    if (pin.digest !== actual) {
+      violations.push({ file: 'templates', rule: 'pack-digest', detail: `pinned ${pin.digest} (v${pin.version}) != actual ${actual} — bump pack-version.json in the same commit` });
+    }
+  } catch (e) {
+    violations.push({ file: 'pack-version.json', rule: 'pack-version-parse', detail: e instanceof Error ? e.message : String(e) });
   }
   return violations;
 }

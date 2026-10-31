@@ -11,6 +11,7 @@
  * THREAT-MODEL).
  */
 import { createHash } from 'node:crypto';
+import { readdir, stat } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +49,24 @@ interface TemplateIndex { schema: string; templates: TemplateIndexEntry[]; }
 export async function loadTemplateIndex(dir = templatesDir()): Promise<TemplateIndex> {
   const raw = JSON.parse(await readFile(join(dir, 'index.json'), 'utf8')) as TemplateIndex;
   return raw;
+}
+
+/** J2: sha256 over index.json + all templates (same rule as scripts/packDigest.ts). */
+export async function loadPackDigest(dir = templatesDir()): Promise<string> {
+  const h = createHash('sha256');
+  h.update(await readFile(join(dir, 'index.json')));
+  const files: string[] = [];
+  const walk = async (d: string): Promise<void> => {
+    const entries = await readdir(d);
+    for (const n of entries) {
+      const p = join(d, n);
+      if ((await stat(p)).isDirectory()) await walk(p);
+      else if (n.endsWith('.yaml')) files.push(p);
+    }
+  };
+  await walk(dir);
+  for (const f of files.sort()) h.update(await readFile(f));
+  return h.digest('hex');
 }
 
 /**
@@ -92,7 +111,7 @@ export function buildNucleiArgs(
 
 // ---------- N6: binary integrity ----------
 
-export interface IntegrityResult { available: boolean; reason?: string | undefined; version?: string | undefined; }
+export interface IntegrityResult { available: boolean; reason?: string | undefined; version?: string | undefined; binaryHash?: string | undefined; }
 
 export async function checkBinaryIntegrity(binary = 'nuclei'): Promise<IntegrityResult> {
   let version: string | undefined;
@@ -113,14 +132,36 @@ export async function checkBinaryIntegrity(binary = 'nuclei'): Promise<Integrity
       return { available: false, reason: `nuclei version mismatch: pinned ${pinnedVersion}, found ${version}`, version };
     }
     const binaryPath = resolveBinary(binary);
+    const hash = binaryPath !== undefined ? createHash('sha256').update(await readFile(binaryPath)).digest('hex') : undefined;
     const pinnedHash = pin.sha256?.[process.platform];
     if (binaryPath !== undefined && pinnedHash !== undefined && pinnedHash !== '') {
-      const hash = createHash('sha256').update(await readFile(binaryPath)).digest('hex');
       if (hash !== pinnedHash) {
         return { available: false, reason: `nuclei binary SHA-256 mismatch — refusing to execute (supply-chain guard, N6)`, version };
       }
     }
-    return { available: true, version };
+    // J1/I18 (hardtask.md): self-computed hashes prove stability, not
+    // authenticity. Chain: (1) the pinned PUBLISHED-ARTIFACT hash must appear
+    // in the vendor's official checksums.txt (committed as
+    // templates/nuclei-checksums-<version>.txt) — anchoring the pin to what the
+    // vendor published; (2) the running binary's hash must equal the pinned
+    // extracted-binary hash — anchoring the file on disk to the pin.
+    const checksumFile = join(templatesDir(), `nuclei-checksums-${pinnedVersion || 'latest'}.txt`);
+    try {
+      const published = await readFile(checksumFile, 'utf8');
+      const artifactHash = (pin as { publishedArtifactSha256?: string }).publishedArtifactSha256 ?? '';
+      if (artifactHash === '') {
+        return { available: false, reason: 'nuclei-pin.json lacks publishedArtifactSha256 — authenticity unverifiable (I18 fail closed)', version };
+      }
+      if (!published.toLowerCase().includes(artifactHash)) {
+        return { available: false, reason: `pinned artifact hash ${artifactHash.slice(0, 16)}… NOT in published checksums — the pin does not correspond to a vendor release (I18 fail closed)`, version };
+      }
+    } catch {
+      return { available: false, reason: `published checksums file missing (${checksumFile}) — authenticity unverifiable, refusing to execute (I18 fail closed)`, version };
+    }
+    if (binaryPath !== undefined && hash !== undefined && pinnedHash !== undefined && pinnedHash !== '' && hash !== pinnedHash) {
+      return { available: false, reason: `nuclei binary SHA-256 mismatch — refusing to execute (supply-chain guard, N6)`, version };
+    }
+    return { available: true, version, binaryHash: hash };
   } catch (e) {
     return { available: false, reason: `integrity check failed: ${e instanceof Error ? e.message : String(e)}`, version };
   }
@@ -195,7 +236,9 @@ export class NucleiAdapter implements Engine {
       return { findings: [], detail: `nuclei exited ${proc.exitCode}: ${proc.stderr.slice(0, 300)}` };
     }
 
-    const findings = NucleiAdapter.parseEvents(proc.stdout, ctx.target.origin, `nuclei ${args.join(' ')} (binary: ${integrity.version ?? 'unknown'})`);
+    // J2: the template pack digest rides in every finding's provenance.
+    const packDigest = await loadPackDigest();
+    const findings = NucleiAdapter.parseEvents(proc.stdout, ctx.target.origin, `nuclei ${args.join(' ')} (binary: ${integrity.version ?? 'unknown'}; pack: ${packDigest.slice(0, 16)})`);
     const gated = index.templates.length - eligible.length;
     return {
       findings,

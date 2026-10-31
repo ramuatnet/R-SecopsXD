@@ -161,7 +161,9 @@ test('every finding carries the complete model (AC16)', () => {
     assert.ok(f.detectedAt);
     assert.ok(f.provenance.length > 0 && f.provenance[0]!.engine);
     // A2 added an audit-backed verification stage: rejected seeds read false_positive.
-    assert.ok(['confirmed', 'probable', 'informational', 'false_positive'].includes(f.status));
+    // I2 (hardtask.md): machine rejections are a distinct, legitimate status.
+    // I2 + H1: machine rejections and unverified port findings are legitimate statuses.
+    assert.ok(['confirmed', 'probable', 'informational', 'false_positive', 'rejected_by_verification', 'untested'].includes(f.status));
   }
 });
 

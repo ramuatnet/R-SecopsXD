@@ -1,0 +1,6 @@
+{
+  "schema": "rsec-pack-version/1",
+  "version": 1,
+  "digest": "2a0b2c1b21dde806f4d1661c65662632e8f874f5067e1996170f8bcb0d1ead0f",
+  "note": "Verify with `node scripts/packDigest.ts --check` (wired into lint). Template changes require a bump commit (J3)."
+}

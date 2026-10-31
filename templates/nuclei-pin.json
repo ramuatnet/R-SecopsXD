@@ -6,5 +6,7 @@
     "linux": "",
     "darwin": ""
   },
-  "note": "Pinned 2026-10-31: nuclei v3.11.1 official release (github.com/projectdiscovery/nuclei/releases/tag/v3.11.1), windows-amd64 zip. The adapter fails closed on version or hash mismatch (N6)."
+  "note": "Pinned 2026-10-31. publishedArtifactSha256 is the official release zip hash \u2014 verified against the release checksums.txt (templates/nuclei-checksums-3.11.1.txt) at install time; sha256[platform] is the extracted binary, verified at every startup. Fails closed on any mismatch (J1/I18).",
+  "publishedArtifactSha256": "bb6cb9ff8939b753f6fcab06fd30a15f5bc61d8382a597871334c007a85ff9d2",
+  "publishedArtifact": "nuclei_3.11.1_windows_amd64.zip"
 }

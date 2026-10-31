@@ -107,6 +107,8 @@ export async function resolveHost(hostname: string): Promise<Resolution> {
 
 interface HttpRecon {
   open: boolean;
+  /** H1: connect succeeded but no protocol bytes came back — open, unverified. */
+  unverified?: boolean | undefined;
   protocol?: string | undefined;
   cn?: string | undefined;
   issuer?: string | undefined;
@@ -197,11 +199,11 @@ export function httpRecon(host: string, port: number, hostname: string, useTls: 
           socket.write(req);
           collect(socket, RECON_BODY_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => {
             const parsed = parseHttpResponse(raw);
-            // A SYN-ACK with zero response bytes is NOT evidence of an open
-            // port — port-forwarding middleboxes accept every connect. Only
-            // an actual protocol answer (HTTP or any banner bytes) counts.
+            // H1 (hardtask.md): connect-with-zero-bytes is open but UNVERIFIED
+            // (real services stay quiet until a protocol prompt). Reported at
+            // info/low confidence, never a high-severity phantom.
             if (!parsed.isHttp && raw.trim() === '') {
-              resolve({ open: false, sans: [], isHttp: false, status: 0, headers: {}, body: '' });
+              resolve({ open: true, unverified: true, sans: [], isHttp: false, status: 0, headers: {}, body: '' });
               return;
             }
             resolve({ open: true, sans: [], isHttp: parsed.isHttp, status: parsed.status, headers: parsed.headers, body: parsed.body });
@@ -319,24 +321,38 @@ const TECH_SIGNATURES: TechSig[] = [
 
 // ---------- interception detection (middleboxes that answer every port) ----------
 
-const INTERCEPTION_MIN_PORTS = 5;
+/** H2 (hardtask.md): threshold configurable, default 8; was 5. */
+export const INTERCEPTION_MIN_PORTS = 8;
+/** H2: ports in this list are NEVER suppressed as interception artifacts. */
+export const NEVER_SUPPRESS_PORTS = new Set([22, 443, 3306, 3389, 5432, 6379, 9200, 27017]);
 
-interface InterceptionInput { port: number; recon?: HttpRecon; banner?: string; }
+interface InterceptionInput { port: number; recon?: HttpRecon; banner?: string; unverified?: boolean | undefined; }
 
 /**
  * Some gateways SYN-ACK every port and answer HTTP (block pages) uniformly.
- * If >=5 probed ports return the exact same response signature, those are
- * interception artifacts, not individual services — suppress them and report
- * the interference itself. Real distinct services never share one response.
+ * If >= threshold probed ports share the FULL response identity — status +
+ * body hash + complete header set (H2: not merely a body prefix) — those are
+ * interception artifacts. Ports in NEVER_SUPPRESS_PORTS are exempt (I16:
+ * suppression must not erase known-critical surface); silent-connect
+ * middleboxes (uniform `silent` signature) are always eligible for
+ * suppression since no real service cluster can share "answered nothing".
  */
 export function detectInterception(
   ops: InterceptionInput[],
-): { suppressed: Set<number>; sample: string | undefined } {
+  opts: { threshold?: number } = {},
+): { suppressed: Set<number>; sample: string | undefined; threshold: number } {
+  const threshold = opts.threshold ?? INTERCEPTION_MIN_PORTS;
   const bySig = new Map<string, InterceptionInput[]>();
   for (const op of ops) {
-    const sig = op.recon !== undefined && op.recon.isHttp
-      ? `http:${op.recon.status}:${op.recon.body.slice(0, 400)}`
-      : `banner:${(op.recon !== undefined ? JSON.stringify(op.recon.headers) : (op.banner ?? '')).slice(0, 400)}`;
+    let sig: string;
+    if (op.recon !== undefined && op.recon.isHttp) {
+      const headerSig = Object.keys(op.recon.headers).sort().map((k) => `${k}=${op.recon!.headers[k]}`).join('&');
+      sig = `http:${op.recon.status}:${headerSig}:${op.recon.body}`;
+    } else if (op.unverified === true) {
+      sig = 'silent';
+    } else {
+      sig = `banner:${(op.recon !== undefined ? JSON.stringify(op.recon.headers) : (op.banner ?? '')).slice(0, 400)}`;
+    }
     const list = bySig.get(sig) ?? [];
     list.push(op);
     bySig.set(sig, list);
@@ -344,17 +360,23 @@ export function detectInterception(
   const suppressed = new Set<number>();
   let sample: string | undefined;
   for (const group of bySig.values()) {
-    if (group.length >= INTERCEPTION_MIN_PORTS) {
-      for (const op of group) suppressed.add(op.port);
+    if (group.length >= threshold) {
+      for (const op of group) {
+        // H2: curated critical ports are never suppressed — a real service on
+        // 22/443/3306/… must survive even a uniform-answer middlebox.
+        if (!NEVER_SUPPRESS_PORTS.has(op.port)) suppressed.add(op.port);
+      }
       if (sample === undefined) {
         const g0 = group[0]!;
-        sample = g0.recon !== undefined && g0.recon.isHttp
-          ? `HTTP ${g0.recon.status} body: ${g0.recon.body.slice(0, 120).replace(/\s+/g, ' ')}`
-          : `banner: ${(g0.banner ?? '(uniform non-HTTP answer)').slice(0, 120)}`;
+        sample = g0.unverified === true
+          ? 'uniform silent connects (no protocol answer on any probed port)'
+          : g0.recon !== undefined && g0.recon.isHttp
+            ? `HTTP ${g0.recon.status} body: ${g0.recon.body.slice(0, 120).replace(/\s+/g, ' ')}`
+            : `banner: ${(g0.banner ?? '(uniform non-HTTP answer)').slice(0, 120)}`;
       }
     }
   }
-  return { suppressed, sample };
+  return { suppressed, sample, threshold };
 }
 
 function osHint(banner: string): string | undefined {
@@ -422,7 +444,7 @@ export class HostInfraEngine implements Engine {
 
     // ---- active: bounded port scan of resolved IPs ----
     const ports = [...new Set([targetPort, ...WEB_PORTS, ...INFRA_PORTS])];
-    interface OpenPort { port: number; banner?: string; recon?: HttpRecon }
+    interface OpenPort { port: number; banner?: string; recon?: HttpRecon; unverified?: boolean | undefined }
     const byIp = new Map<string, OpenPort[]>();
 
     for (const ip of res.ips) {
@@ -436,18 +458,20 @@ export class HostInfraEngine implements Engine {
             const recon = await httpRecon(ip, port, hostname, TLS_PORTS.has(port));
             return recon.open ? { port, recon } : null;
           }
-          const { open, banner } = await scanPort(ip, port, PROBE_TIMEOUT_MS);
-          const r: { port: number; banner?: string } | null = open ? { port } : null;
+          const { open, unverified, banner } = await scanPort(ip, port, PROBE_TIMEOUT_MS);
+          const r: { port: number; banner?: string; unverified?: boolean } | null = open ? { port } : null;
           if (r && banner !== undefined) r.banner = banner;
+          if (r && unverified === true) r.unverified = true;
           return r;
         }));
         for (const r of results) {
           if (r.status !== 'fulfilled' || r.value === null) continue;
-          const v = r.value as { port: number; banner?: string; recon?: HttpRecon };
+          const v = r.value as { port: number; banner?: string; recon?: HttpRecon; unverified?: boolean };
           const list = byIp.get(ip) ?? [];
           const entry: OpenPort = { port: v.port };
-          if (v.recon !== undefined) entry.recon = v.recon;
+          if (v.recon !== undefined) { entry.recon = v.recon; if (v.recon.unverified === true) entry.unverified = true; }
           else if (v.banner !== undefined) entry.banner = v.banner;
+          if (v.unverified === true) entry.unverified = true;
           list.push(entry);
           byIp.set(ip, list);
         }
@@ -470,11 +494,13 @@ export class HostInfraEngine implements Engine {
       if (byIp.get(ip)!.length === 0) byIp.delete(ip);
     }
     if (suppressedCount > 0) {
+      // H3 (hardtask.md): interference carries its own severity band (low) and
+      // the suppressed count surfaces in the finding + scan detail.
       findings.push({
         rawId: 'port-scan-interference',
         title: `Port-scan interference: ${suppressedCount} port(s) returned an identical response — middlebox answers for the whole set, individual services not confirmed`,
         category: 'A01',
-        severity: 'info',
+        severity: 'low',
         confidence: 'medium',
         status: 'informational',
         asset,
@@ -491,7 +517,7 @@ export class HostInfraEngine implements Engine {
     }
 
     if (byIp.size === 0) {
-      return { findings, detail: `resolved ${res.ips.length} IP(s); ${ports.length} ports probed — ${suppressedCount} suppressed as middlebox interception, no confirmed services` };
+      return { findings, detail: `resolved ${res.ips.length} IP(s); ${ports.length} ports probed — ${suppressedCount} ports suppressed as middlebox interception, no confirmed services` };
     }
 
     let edgeNoted = false;
@@ -532,32 +558,39 @@ export class HostInfraEngine implements Engine {
       for (const op of ops) {
         // A1: per-port finding with exposure-class severity — open ports must
         // surface as first-class results, not only inside the host summary.
-        const sev = portSeverity(op.port);
+        // H1 (hardtask.md): connect-only ports (no protocol answer) are open
+        // but UNVERIFIED — info/low-confidence, never a class-severity claim.
+        const unverified = op.unverified === true;
+        const sev = unverified ? 'info' : portSeverity(op.port);
         const portSvc = op.recon !== undefined && op.recon.isHttp
           ? `HTTP ${op.recon.status}`
           : (op.banner ?? '').split('\r\n')[0]?.slice(0, 60) || 'tcp';
         findings.push({
           rawId: 'port-open',
-          title: `Port ${op.port} open on ${ip} (${portSvc})`,
+          title: `Port ${op.port} open on ${ip} (${portSvc})${unverified ? ' — unverified: connect succeeded, no protocol answer' : ''}`,
           category: 'A01',
           severity: sev,
-          confidence: 'high',
-          status: 'confirmed',
+          confidence: unverified ? 'low' : 'high',
+          status: unverified ? 'untested' : 'confirmed',
           asset,
           locator: `${ip}:${op.port}`,
           evidence: [{
             kind: 'process',
             command: `TCP connect ${ip}:${op.port}`,
-            observation: `Port answers. Exposure class: ${sev}${HIGH_PORTS.has(op.port) ? ' (database/remote-access/cluster API reachable at the edge)' : MEDIUM_PORTS.has(op.port) ? ' (risky-by-default app/dev port)' : ''}`,
+            observation: unverified
+              ? 'TCP handshake succeeded; the port answered the HTTP nudge with no protocol bytes. Open but unverified — a real quiet service (SSH/Redis) or a middlebox that accepts every connect.'
+              : `Port answers. Exposure class: ${sev}${HIGH_PORTS.has(op.port) ? ' (database/remote-access/cluster API reachable at the edge)' : MEDIUM_PORTS.has(op.port) ? ' (risky-by-default app/dev port)' : ''}`,
           }],
-          explanation:
-            sev === 'high'
+          explanation: unverified
+            ? 'The TCP layer accepted the connection but no service identified itself. This is reported at low confidence so real quiet services (SSH, Redis, some MySQL) are not missed, while middleboxes that accept every connect cannot inflate severity.'
+            : sev === 'high'
               ? 'This port exposes a service that should normally never be reachable from the public internet (database, remote access, message queue or cluster API). Its presence at the edge is itself the finding — even if authentication currently holds.'
               : sev === 'medium'
                 ? 'This port commonly hosts development servers, alternate app instances or admin tooling. Confirm the service is intended to be public and hardened.'
                 : 'Standard web port reachable at the edge. Expected for a public site; review only in combination with what answers on it.',
-          remediation:
-            sev === 'high'
+          remediation: unverified
+            ? 'Verify what listens on this port (service discovery or credentialed scan); restrict unexplained listeners at the firewall.'
+            : sev === 'high'
               ? 'Restrict this port at the firewall/security group to known source ranges (VPN/bastion). If it must stay reachable, put it behind authenticated proxies and alert on new bindings.'
               : 'Verify the service on this port is intended and up to date; suppress version banners.',
           references: [],

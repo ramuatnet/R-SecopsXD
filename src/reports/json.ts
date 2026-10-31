@@ -4,6 +4,7 @@
 import type { CoverageReport, Evidence, Finding, Scan } from '../core/types.ts';
 import { redactHeaders, redactText } from '../core/redact.ts';
 import { riskForFinding } from '../risk/attach.ts';
+import type { ScanQuality } from '../verify/metrics.ts';
 
 export interface JsonReport {
   schema: 'owasp-assessment-platform/report';
@@ -21,6 +22,8 @@ export interface JsonReport {
   findings: Array<Finding & { risk: ReturnType<typeof riskForFinding> }>;
   /** F4: explainable risk bands over the attached per-finding risk model. */
   riskSummary: Record<string, number>;
+  /** I3 (hardtask.md): recall/precision against provided ground truth (null basis = unavailable). */
+  quality: { recall: number | null; precision: number | null; basis: string; matchedTruth: string[]; totalTruth: number; totalFindings: number };
   coverage: CoverageReport[];
   disclaimer: string;
 }
@@ -66,7 +69,12 @@ export function redactFindingEvidence(f: Finding): Finding {
   return { ...f, evidence };
 }
 
-export function buildJsonReport(scan: Scan, findings: Finding[], generatedAt = new Date().toISOString()): JsonReport {
+export function buildJsonReport(
+  scan: Scan,
+  findings: Finding[],
+  generatedAt = new Date().toISOString(),
+  opts: { fanoutOf?: (f: Finding) => number; quality?: ScanQuality | undefined } = {},
+): JsonReport {
   const bySeverity: Record<string, number> = {};
   const byStatus: Record<string, number> = {};
   for (const f of findings) {
@@ -86,8 +94,9 @@ export function buildJsonReport(scan: Scan, findings: Finding[], generatedAt = n
       enginesRun: scan.engines.filter((e) => e.status === 'ran').map((e) => e.engine),
       enginesUnavailable: scan.engines.filter((e) => e.status === 'unavailable').map((e) => e.engine),
     },
-    findings: findings.map((f) => ({ ...redactFindingEvidence(f), risk: riskForFinding(f) })),
+    findings: findings.map((f) => ({ ...redactFindingEvidence(f), risk: riskForFinding(f, opts.fanoutOf !== undefined ? { fanout: opts.fanoutOf(f) } : {}) })),
     riskSummary: buildRiskSummary(findings),
+    quality: opts.quality ?? { recall: null, precision: null, basis: 'unavailable', matchedTruth: [], totalTruth: 0, totalFindings: findings.length },
     coverage: scan.coverage,
     disclaimer: DISCLAIMER,
   };

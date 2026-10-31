@@ -24,7 +24,7 @@ export type Confidence = 'high' | 'medium' | 'low';
  * - untested: check not executed for this target/mode
  */
 export type ValidationStatus =
-  | 'confirmed' | 'probable' | 'informational' | 'false_positive' | 'untested';
+  | 'confirmed' | 'probable' | 'informational' | 'false_positive' | 'rejected_by_verification' | 'untested';
 
 export type ScanMode = 'passive' | 'active';
 

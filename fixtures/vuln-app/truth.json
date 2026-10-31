@@ -12,6 +12,7 @@
     { "id": "V9", "name": "Username enumeration via differential login responses", "category": "A07", "mode": "active", "match": { "cwe": 645 } },
     { "id": "V10", "name": "No rate limiting on authentication endpoint", "category": "A07", "mode": "active", "match": { "titleContains": "rate limit" } },
     { "id": "V11", "name": "IDOR: order objects accessible without authorization", "category": "A01", "mode": "active", "match": { "cwe": 639 } },
-    { "id": "V12", "name": "Directory listing enabled on /assets/", "category": "A01", "mode": "active", "match": { "cwe": 548 } }
+    { "id": "V12", "name": "Directory listing enabled on /assets/", "category": "A01", "mode": "active", "match": { "cwe": 548 } },
+    { "id": "V13", "name": "Service reachable on port 8899 (host-infra port-open)", "category": "A01", "mode": "active", "match": { "port": 8899 } }
   ]
 }

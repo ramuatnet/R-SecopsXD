@@ -9,11 +9,14 @@
 import type { Finding } from '../core/types.ts';
 import { isPublicTarget } from '../scoring/scoring.ts';
 import { blastFactor, confirmationGate, type Signal } from './risk.ts';
+import { enrichBase } from './advisories.ts';
 
 export interface FindingRisk {
   score: number;
   band: 'critical' | 'high' | 'medium' | 'low';
   factors: { base: number; reachability: number; exposure: number; criticality: number; blast: number };
+  /** L1: where the base came from — real EPSS/CVSS snapshot or severity fallback. */
+  baseSource: 'epss' | 'cvss' | 'severity';
   /** F3 noise-rule annotation: which confirmation signals this finding carries. */
   signals: Signal[];
   confirmationGate: 'confirmed' | 'probable';
@@ -23,7 +26,18 @@ export interface FindingRisk {
 const SEVERITY_BASE: Record<string, number> = { critical: 1.0, high: 0.9, medium: 0.6, low: 0.3, info: 0.05 };
 
 export function riskForFinding(f: Finding, opts: { fanout?: number; tier?: number; internetReachable?: boolean } = {}): FindingRisk {
-  const base = SEVERITY_BASE[f.severity] ?? 0.05;
+  const severityBase = SEVERITY_BASE[f.severity] ?? 0.05;
+  // L1 (hardtask.md): CVE-bearing findings use the real offline advisory base
+  // (max(CVSS/10, EPSS*1.4) floored at 0.05); everything else stays
+  // severity-derived with an explicit base_source.
+  const enrich = enrichBase(f.cve, severityBase, (b) => {
+    const candidates: number[] = [];
+    if (b.cvss !== undefined) candidates.push(b.cvss / 10);
+    if (b.epss !== undefined) candidates.push(b.epss * 1.4);
+    const max = candidates.length > 0 ? Math.max(...candidates) : 0;
+    return Math.max(0.05, Math.min(1, max));
+  });
+  const base = enrich.base;
   const publicTarget = opts.internetReachable ?? isPublicTarget(f.asset);
   const factors = {
     base,
@@ -46,6 +60,7 @@ export function riskForFinding(f: Finding, opts: { fanout?: number; tier?: numbe
     score,
     band: score >= 80 ? 'critical' : score >= 50 ? 'high' : score >= 20 ? 'medium' : 'low',
     factors,
+    baseSource: enrich.baseSource,
     signals,
     confirmationGate: gate,
     // F3 backlog rule without EPSS data: unconfirmed findings on non-internet assets

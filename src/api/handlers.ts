@@ -11,8 +11,13 @@ import type { Config } from '../config.ts';
 import { parseOrigin, isPrivateHost, ScopeError } from '../safety/guard.ts';
 import { PROFILES, getProfile, enginePlan } from '../core/profiles.ts';
 import { OWASP_CATEGORIES, ALL_CATEGORIES } from '../core/owasp.ts';
-import type { OwaspCategory, ScanMode, Target, ValidationStatus } from '../core/types.ts';
+import type { Finding,  OwaspCategory, ScanMode, Target, ValidationStatus } from '../core/types.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderReport } from '../reports/registry.ts';
+import { GraphStore } from '../graph/graph.ts';
+import { assetUid } from '../graph/uid.ts';
+import { scoreAgainstTruth, type ScanQuality } from '../verify/metrics.ts';
 import { diffScanFindings } from '../scan/diff.ts';
 import { TargetModel } from '../model/targetModel.ts';
 
@@ -145,11 +150,14 @@ export function listOwasp(app: App): Handler {
 export const startScan = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
   const body = await readJsonBody(ctx.req) as Record<string, unknown>;
   const targetId = asString(body.targetId);
-  const profile = asString(body.profile) ?? 'standard-active';
+  // K1 (hardtask.md): accept BOTH field names, never silently default — a
+  // missing or unknown profile is a 400, not a surprise standard-active scan.
+  const profile = asString(body.profile) ?? asString(body.profileId);
   const mode = (asString(body.mode) === 'active' ? 'active' : asString(body.mode) === 'passive' ? 'passive' : undefined) as ScanMode | undefined;
 
   if (!targetId) bad(400, 'target_required', 'targetId is required');
   if (!mode) bad(400, 'invalid_mode', "mode must be 'passive' or 'active'");
+  if (profile === undefined) bad(400, 'profile_required', 'profile (or profileId) is required — no silent default');
   if (!getProfile(profile)) bad(400, 'unknown_profile', `unknown profile: ${profile}`);
 
   try {
@@ -220,8 +228,21 @@ export const getReport = (app: App): Handler => withAuth(app.db.verifyToken.bind
   if (!scan) bad(404, 'not_found', 'scan not found');
   const format = (ctx.url.searchParams.get('format') ?? 'json').toLowerCase();
   const findings = app.db.getFindings(scan.id);
+  // L2 (hardtask.md): blast factor from REAL graph fan-out when the graph has
+  // edges for the finding's asset node; neutral 1.0 otherwise.
   try {
-    const report: string | Uint8Array = renderReport(scan, findings, format);
+    const graph = new GraphStore(app.db.handle);
+    const fanoutOf = (f: Finding): number => graph.fanout(assetUid('finding', f.fingerprint));
+    // I3: quality against ground truth only when explicitly requested
+    let quality: ScanQuality | undefined;
+    const truthPath = ctx.url.searchParams.get('truth');
+    if (truthPath !== null && truthPath.startsWith('fixtures/') && !truthPath.includes('..')) {
+      try {
+        const truth = JSON.parse(readFileSync(join(process.cwd(), truthPath), 'utf8')) as { items?: Array<{ id?: string; match?: { cwe?: number; locatorContains?: string; titleContains?: string; port?: number } }> };
+        quality = scoreAgainstTruth(findings, truth.items ?? []);
+      } catch { /* truth file unreadable — quality stays unavailable */ }
+    }
+    const report: string | Uint8Array = renderReport(scan, findings, format, new Date().toISOString(), { fanoutOf, quality });
     const mime = format === 'pdf' ? 'application/pdf'
       : format === 'html' ? 'text/html; charset=utf-8'
       : 'application/json; charset=utf-8';

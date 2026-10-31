@@ -64,3 +64,48 @@ export function precisionRecallByClass(
   }
   return out;
 }
+
+// ---------- I3 (hardtask.md): per-scan recall/precision against ground truth ----------
+
+export interface TruthItem {
+  id?: string;
+  category?: string;
+  match?: { cwe?: number; locatorContains?: string; titleContains?: string; port?: number };
+}
+
+export interface ScanQuality {
+  recall: number;
+  precision: number;
+  matchedTruth: string[];
+  totalTruth: number;
+  totalFindings: number;
+  basis: string;
+}
+
+/**
+ * Recall/precision of a scan against a ground-truth file (fixtures/<app>/truth.json).
+ * A truth item matches when any finding satisfies ALL of its match rules
+ * (cwe equality, locator/title substring, port suffix). Precision counts
+ * findings that match at least one truth item — meaningful only where every
+ * real issue is planted (fixtures).
+ */
+export function scoreAgainstTruth(findings: Array<{ category?: string; cwe?: number | undefined; locator?: string; title?: string }>, truth: TruthItem[]): ScanQuality {
+  const matched: string[] = [];
+  const matchedFindingIdx = new Set<number>();
+  for (const item of truth) {
+    const m = item.match ?? {};
+    let hit = false;
+    findings.forEach((f, idx) => {
+      if (hit) return;
+      const cweOk = m.cwe === undefined || f.cwe === m.cwe;
+      const locOk = m.locatorContains === undefined || (f.locator ?? '').includes(m.locatorContains);
+      const titleOk = m.titleContains === undefined || (f.title ?? '').toLowerCase().includes(m.titleContains.toLowerCase());
+      const portOk = m.port === undefined || (f.locator ?? '').endsWith(':' + String(m.port));
+      if (cweOk && locOk && titleOk && portOk) { hit = true; matchedFindingIdx.add(idx); }
+    });
+    if (hit && item.id !== undefined) matched.push(item.id);
+  }
+  const recall = truth.length === 0 ? 1 : matched.length / truth.length;
+  const precision = findings.length === 0 ? 1 : matchedFindingIdx.size / findings.length;
+  return { recall, precision, matchedTruth: matched, totalTruth: truth.length, totalFindings: findings.length, basis: 'ground-truth-fixture' };
+}

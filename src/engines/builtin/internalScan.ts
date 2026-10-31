@@ -18,17 +18,25 @@ export interface PortScanResult {
 
 const COMMON_PORTS = [80, 443, 8080, 8443, 3000, 5000, 8000, 8888, 9090, 3306, 5432, 6379, 27017, 22, 21, 23, 25, 3389];
 
-export function scanPort(host: string, port: number, timeoutMs = 3000): Promise<{ open: boolean; banner?: string }> {
+export function scanPort(host: string, port: number, timeoutMs = 3000): Promise<{ open: boolean; unverified?: boolean; banner?: string }> {
   return new Promise((resolve) => {
     const socket: Socket = netConnect({ host, port });
     let banner = '';
+    let connected = false;
     let settled = false;
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; socket.destroy(); resolve({ open: false }); }
+      if (!settled) {
+        settled = true; socket.destroy();
+        // H1 (hardtask.md): a TCP connect that answered no protocol bytes is
+        // still a SYN-ACK — open but UNVERIFIED (real services like SSH/Redis
+        // stay quiet until a protocol prompt). Never silently dropped.
+        resolve(connected ? { open: true, unverified: true } : { open: false });
+      }
     }, timeoutMs);
 
     socket.on('connect', () => {
-      // Send a minimal HTTP probe to elicit a banner
+      connected = true;
+      // Send a minimal HTTP probe to elicit a banner (protocol-appropriate nudge)
       socket.write(`GET / HTTP/1.0\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
     });
     socket.on('data', (chunk: Buffer) => {
@@ -41,7 +49,11 @@ export function scanPort(host: string, port: number, timeoutMs = 3000): Promise<
       }
     });
     socket.on('close', () => {
-      if (!settled) { settled = true; clearTimeout(timer); const r: { open: boolean; banner?: string } = { open: banner.length > 0 }; if (banner.length > 0) { r.banner = banner.slice(0, 512); } resolve(r); }
+      if (!settled) {
+        settled = true; clearTimeout(timer);
+        if (banner.length > 0) resolve({ open: true, banner: banner.slice(0, 512) });
+        else resolve(connected ? { open: true, unverified: true } : { open: false });
+      }
     });
     socket.on('error', () => {
       if (!settled) { settled = true; clearTimeout(timer); resolve({ open: false }); }
