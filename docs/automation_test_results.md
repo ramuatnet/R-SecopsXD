@@ -135,3 +135,23 @@ No category regressed to a higher claim (enforced by the no-inflation test).
 - Verified live: re-scan of zmail now yields exactly the scope-edge finding; the header findings
   (which were coincidentally true on the raw 302) are no longer claimed from a blocked fetch.
 - Suite: **194/194**
+
+## EASM expansion: ports, fingerprints, proactive discovery (2026-10-31)
+
+- **Ports**: host-infra expanded 18 → ~35 ports (added Telnet 23, MSRPC 135, NetBIOS 139, SMB 445,
+  WebLogic 7001, GlassFish 4848, K8s API 6443, Docker 2375/2376, Elasticsearch 9200, memcached
+  11211, VNC 5900, CouchDB 5984, plus alt-HTTP 8008/8081/9000). Fingerprint port→service map extended.
+- **Deep recon per open HTTP/TLS port** (one connection: TLS handshake + GET /): response-header and
+  body signature identification (Jenkins, Grafana, K8s Dashboard/API, Elasticsearch, phpMyAdmin,
+  WebLogic, GlassFish, Kibana, SonarQube, Jetty, MinIO, default nginx/Apache/IIS pages), favicon
+  murmur3 hashing (shodan favicon-hash compatible) for external correlation, CDN/WAF edge detection
+  from response headers (cf-ray, x-amz-cf-*, x-akamai-*, x-sucuri-id, x-vercel-id, x-msedge-ref, …).
+  Management-interface finding now names the product.
+- **New engine `builtin.asset-discovery`** (passive, wired into standard-passive/active + external-dast):
+  DNS records (CNAME/MX/NS/TXT), Certificate Transparency names via crt.sh with liveness resolution,
+  target cert SANs, IP attribution via Team Cymru IP→ASN whois (ASN/owner/country). Active mode adds
+  AXFR zone-transfer attempts against discovered NS and cloud bucket listability probes.
+  Discovered assets are LISTED, never scanned — registering them as targets remains an explicit
+  approval decision (scope model preserved). Short-circuits cleanly for IP-literal/localhost targets.
+- New tasks: A01-T14 (asset discovery), A01-T15 (tech-stack identification), A02-T10 (AXFR/buckets).
+- Suite: **200/200**

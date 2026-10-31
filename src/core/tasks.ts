@@ -152,6 +152,15 @@ export const TASKS: AssessmentTask[] = [
     refs: ['https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README'],
     evidenceExpectation: 'TCP/TLS probe evidence for the flagged port',
   },
+  {
+    id: 'A02-T10', category: 'A02', engine: 'builtin.asset-discovery', mode: 'active',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'DNS zone transfer (AXFR) exposure and public cloud bucket check',
+    description: 'Active-mode checks: attempts unauthenticated AXFR against the domain\u2019s discovered nameservers (success = whole zone disclosed), and probes cloud storage buckets named after the domain for public listability.',
+    rawIdPattern: '',
+    refs: ['https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration/README'],
+    evidenceExpectation: 'AXFR response or bucket probe evidence',
+  },
 
   {
     id: 'A01-T11', category: 'A01', engine: 'builtin.authenticated-probe', mode: 'active',
@@ -179,6 +188,24 @@ export const TASKS: AssessmentTask[] = [
     rawIdPattern: 'host-discovered',
     refs: [W('01-Information_Gathering/README')],
     evidenceExpectation: 'DNS records + per-port probe evidence',
+  },
+  {
+    id: 'A01-T14', category: 'A01', engine: 'builtin.asset-discovery', mode: 'passive',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'External asset discovery: DNS records, CT logs, subdomains, IP attribution',
+    description: 'Passive enumeration of the registered domain space: CNAME/MX/NS/TXT records, Certificate Transparency certificate names (with liveness resolution), target certificate SANs, and ASN/owner/country attribution of the resolved IPs (Team Cymru). Discovered assets are listed, never scanned.',
+    rawIdPattern: '',
+    refs: [W('01-Information_Gathering/README')],
+    evidenceExpectation: 'DNS/CT/SAN/whois evidence per source',
+  },
+  {
+    id: 'A01-T15', category: 'A01', engine: 'builtin.host-infra', mode: 'active',
+    targetKinds: ['webapp'], strength: 'strong',
+    title: 'Perimeter tech-stack identification (banners, body signatures, favicon hash, WAF/CDN)',
+    description: 'For each open HTTP/TLS port on the target\u2019s resolved IPs: response-header and body signature matching (CI/CD, dashboards, cluster APIs, default landing pages), favicon murmur3 hashing for external correlation, and CDN/WAF edge detection from response headers.',
+    rawIdPattern: 'service-identified',
+    refs: [W('01-Information_Gathering/README')],
+    evidenceExpectation: 'HTTP recon evidence per port with matched signatures',
   },
   {
     id: 'A01-T10', category: 'A01', engine: 'builtin.http-observation', mode: 'passive',

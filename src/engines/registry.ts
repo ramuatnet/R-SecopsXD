@@ -21,6 +21,7 @@ import { VariantHunter } from './builtin/variantHunter.ts';
 import { BlindSsrfProbeEngine } from './builtin/blindSsrfProbe.ts';
 import { InternalScanEngine } from './builtin/internalScanEngine.ts';
 import { HostInfraEngine } from './builtin/hostInfra.ts';
+import { AssetDiscoveryEngine } from './builtin/assetDiscovery.ts';
 import { probeHostHeaderInjection } from './builtin/rawProbes.ts';
 import { SemgrepAdapter } from './adapters/semgrep.ts';
 import { TrivyAdapter } from './adapters/trivy.ts';
@@ -59,6 +60,7 @@ export class EngineRegistry {
       case 'builtin.blind-ssrf-probe': return new BlindSsrfProbeEngine();
       case 'builtin.internal-scan': return new InternalScanEngine();
       case 'builtin.host-infra': return new HostInfraEngine();
+      case 'builtin.asset-discovery': return new AssetDiscoveryEngine();
       case 'adapter.semgrep': return new SemgrepAdapter();
       case 'adapter.trivy': return new TrivyAdapter();
       case 'adapter.grype': return new GrypeAdapter();
@@ -72,7 +74,7 @@ export class EngineRegistry {
     return [
       'builtin.crawler-lite', 'builtin.http-observation', 'builtin.path-probe',
       'builtin.reflection-probe', 'builtin.auth-probe', 'builtin.source-scan',
-      'builtin.dep-manifest', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.authenticated-probe', 'builtin.redirect-probe', 'builtin.graphql-probe', 'builtin.endpoint-discovery', 'builtin.variant-hunter', 'builtin.blind-ssrf-probe', 'builtin.internal-scan', 'builtin.host-infra', 'adapter.semgrep', 'adapter.trivy', 'adapter.grype',
+      'builtin.dep-manifest', 'builtin.tls-analysis', 'builtin.openapi-policy', 'builtin.authenticated-probe', 'builtin.redirect-probe', 'builtin.graphql-probe', 'builtin.endpoint-discovery', 'builtin.variant-hunter', 'builtin.blind-ssrf-probe', 'builtin.internal-scan', 'builtin.host-infra', 'builtin.asset-discovery', 'adapter.semgrep', 'adapter.trivy', 'adapter.grype',
       'adapter.nuclei', 'adapter.zap',
     ];
   }

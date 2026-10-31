@@ -59,3 +59,6 @@ manual,-,A09,A09-T01,Server-side logging and alerting effectiveness review,passi
 builtin.host-infra,builtin,A01,A01-T13,External infrastructure recon (DNS to IP to ports to services),active,webapp,strong,implemented
 builtin.host-infra,builtin,A02,A02-T09,Management interface exposure on non-standard ports,active,webapp,strong,implemented
 builtin.host-infra,builtin,A03,A03-T08,Infrastructure service version to CVE matching,active,webapp,strong,implemented
+builtin.host-infra,builtin,A01,A01-T15,Perimeter tech-stack identification (banners/body/favicon/WAF),active,webapp,strong,implemented
+builtin.asset-discovery,builtin,A01,A01-T14,External asset discovery (DNS/CT/SANs/IP-attribution),passive,webapp,strong,implemented
+builtin.asset-discovery,builtin,A02,A02-T10,AXFR zone transfer + cloud bucket probes,active,webapp,strong,implemented

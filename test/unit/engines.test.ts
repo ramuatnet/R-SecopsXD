@@ -248,3 +248,86 @@ test('crawler emits root-fetch-blocked finding when the root fetch is scope-bloc
   assert.equal(blockedFindings.length, 1, 'exactly one root-fetch-blocked info finding');
   assert.match(blockedFindings[0]!.evidence[0]!.kind === 'process' ? blockedFindings[0]!.evidence[0]!.observation : '', /redirect blocked/);
 });
+
+// ---------- EASM: murmur3, CT filtering, AXFR, asset discovery, tech signatures ----------
+
+test('murmur3 x86_32 matches reference vectors', async () => {
+  const { murmur3Hex } = await import('../../src/engines/builtin/hostInfra.ts');
+  assert.equal(murmur3Hex(''), '00000000');
+  assert.equal(murmur3Hex('hello'), '248bfa47', 'shodan favicon-hash compatible mmh3 of "hello"');
+});
+
+test('filterCtNames strips wildcards, dedupes, keeps only domain space', async () => {
+  const { filterCtNames } = await import('../../src/engines/builtin/assetDiscovery.ts');
+  const names = filterCtNames(
+    [
+      { name_value: '*.htcinc.com\nmail.htcinc.com' },
+      { name_value: 'htcinc.com' },
+      { name_value: 'evil.example.com' },
+      { name_value: 'admin@htcinc.com' },
+      { name_value: 'dev.htcinc.com\ndev.htcinc.com' },
+    ],
+    'htcinc.com',
+  );
+  assert.deepEqual(names, ['dev.htcinc.com', 'htcinc.com', 'mail.htcinc.com']);
+});
+
+test('buildAxfrQuery produces a well-formed AXFR question', async () => {
+  const { buildAxfrQuery } = await import('../../src/engines/builtin/assetDiscovery.ts');
+  const q = buildAxfrQuery('example.com');
+  assert.equal(q[0], 0x2a); // id
+  assert.equal(q.readUInt16BE(4), 1); // qdcount
+  const idx = q.length - 4;
+  assert.equal(q[idx], 0x00); // QTYPE hi
+  assert.equal(q[idx + 1], 0xfc); // QTYPE lo = 252 (AXFR)
+  assert.equal(q[idx + 2], 0x00); // QCLASS hi
+  assert.equal(q[idx + 3], 0x01); // QCLASS lo = IN
+  // labels: \x07example\x03com\x00
+  assert.ok(q.subarray(12).includes(Buffer.from('\x07example\x03com\x00')));
+});
+
+test('registrableDomain extracts last two labels; rejects localhost', async () => {
+  const { registrableDomain } = await import('../../src/engines/builtin/assetDiscovery.ts');
+  assert.equal(registrableDomain('www.htcinc.com'), 'htcinc.com');
+  assert.equal(registrableDomain('a.b.htcnxt.ai'), 'htcnxt.ai');
+  assert.equal(registrableDomain('localhost'), undefined);
+});
+
+test('asset discovery short-circuits for IP-literal targets (no network)', async () => {
+  const { AssetDiscoveryEngine } = await import('../../src/engines/builtin/assetDiscovery.ts');
+  const engine = new AssetDiscoveryEngine();
+  const res = await engine.run({
+    scanId: 's', target: { id: 't', name: 'x', origin: 'http://127.0.0.1:8899', kind: 'webapp', approved: true, createdAt: new Date().toISOString() },
+    mode: 'passive', client: {} as never, guard: {} as never, stats: { sent: 0, blocked: 0 },
+    signal: new AbortController().signal, workDir: '.', log: () => {},
+  } as never);
+  assert.equal(res.findings.length, 0);
+  assert.match(res.detail ?? '', /IP literal/);
+});
+
+test('host-infra identifies tech stack from body/header signatures (live loopback)', async () => {
+  const { HostInfraEngine } = await import('../../src/engines/builtin/hostInfra.ts');
+  const createHttpServer = (await import('node:http')).createServer;
+  const server = createHttpServer((_req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'x-jenkins': '2.440.1' });
+    res.end('<html><title>Dashboard [Jenkins]</title></html>');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const engine = new HostInfraEngine();
+    const res = await engine.run({
+      scanId: 's', target: { id: 't', name: 'x', origin: `http://localhost:${port}`, kind: 'webapp', approved: true, createdAt: new Date().toISOString() },
+      mode: 'active', client: {} as never, guard: {} as never, stats: { sent: 0, blocked: 0 },
+      signal: new AbortController().signal, workDir: '.', log: () => {},
+    } as never);
+    const identified = res.findings.filter((f: { rawId?: string }) => f.rawId === 'service-identified');
+    assert.ok(identified.length > 0, 'service-identified emitted');
+    const obs = identified[0]!.evidence[0]!.kind === 'process' ? identified[0]!.evidence[0]!.observation : '';
+    assert.match(obs, /Jenkins/i);
+    const mgmt = res.findings.filter((f: { rawId?: string }) => f.rawId === 'management-interface-exposed');
+    assert.ok(mgmt.length > 0, 'management interface flagged for Jenkins signature');
+  } finally {
+    server.close();
+  }
+});

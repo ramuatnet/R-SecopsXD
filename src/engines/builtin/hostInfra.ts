@@ -6,13 +6,15 @@
  * needed: scan scope is anchored to the target's own DNS records.
  *
  * Passive mode: DNS resolution only (no packets to the host).
- * Active mode: DNS + bounded TCP port scan + TLS probe + fingerprint + CVE.
+ * Active mode: DNS + bounded TCP port scan (~35 ports) + TLS probe
+ * (certificate + HTTP recon) + tech-stack/WAF signature identification +
+ * favicon hash + fingerprint + CVE.
  *
  * Safety: only IPs the registered target's hostname resolves to are scanned
  * (max 4, IPv4 first); bounded port list; honors ctx.signal; unresolvable
  * hostnames produce no findings (unknown is never assumed — I8).
  */
-import { lookup, reverse, resolveCname } from 'node:dns/promises';
+import { connect as netConnect, type Socket } from 'node:net';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import { scanPort } from './internalScan.ts';
 import { fingerprint, matchServiceCves, type ServiceFingerprint } from './internalScanEngine.ts';
@@ -25,26 +27,33 @@ const INFO: EngineInfo = {
   name: 'Host Infrastructure Recon',
   kind: 'builtin',
   capabilities: {
-    A01: cap("DNS resolution, live host discovery and open-port mapping of the registered target's own infrastructure"),
-    A02: cap('management interface exposure on non-standard ports'),
+    A01: cap("DNS resolution, live host discovery, open-port mapping and tech-stack/WAF identification of the registered target's own infrastructure"),
+    A02: cap('management interface / admin console exposure on non-standard ports (product-identified)'),
     A03: cap('service version → CVE matching on scanned infrastructure services (offline advisory list)'),
   },
   modes: ['active'],
   targetKinds: ['webapp'],
 };
 
-const WEB_PORTS = [80, 443, 8080, 8443, 8000, 5000, 3000, 8888, 9090];
-const INFRA_PORTS = [22, 21, 25, 3389, 3306, 5432, 6379, 27017];
-const TLS_PORTS = new Set([443, 8443]);
+// ---------- port universe (bounded, service-annotated) ----------
+
+const WEB_PORTS = [80, 443, 8080, 8443, 8000, 8008, 8081, 5000, 3000, 8888, 9000, 9090, 9200, 7001, 4848, 6443, 2375, 2376, 5984];
+const INFRA_PORTS = [22, 21, 23, 25, 135, 139, 445, 3389, 3306, 5432, 6379, 27017, 11211, 5900];
+const TLS_PORTS = new Set([443, 8443, 2376, 6443]);
+const HTTP_PORTS = new Set([80, 8080, 8443, 8000, 8008, 8081, 5000, 3000, 8888, 9000, 9090, 9200, 7001, 4848, 5984]);
+const MGMT_PORTS = new Set([8080, 8443, 9000, 4848, 7001, 6443, 2375, 2376, 11211]);
 const MAX_IPS = 4;
-const PORT_BATCH = 32;
+const PORT_BATCH = 40;
 const PROBE_TIMEOUT_MS = 3000;
+const RECON_TIMEOUT_MS = 6000;
+const RECON_BODY_CAP = 32 * 1024;
+const FAVICON_CAP = 64 * 1024;
 
 // ---------- DNS resolution (nslookup-equivalent, passive-safe) ----------
 
 interface Resolution {
   ips: string[];
-  cname?: string;
+  cname?: string | undefined;
   ptrs: Map<string, string>;
 }
 
@@ -65,16 +74,16 @@ export async function resolveHost(hostname: string): Promise<Resolution> {
   if (isIpv4Literal(hostname)) return { ips: [hostname], ptrs };
   // lookup() uses the OS resolver (hosts file + DNS) — primary source.
   const addrs = await dnsTimeout(
-    lookup(hostname, { all: true }).catch(() => [] as Array<{ address: string; family: number }>),
+    (await import('node:dns/promises')).lookup(hostname, { all: true }).catch(() => [] as Array<{ address: string; family: number }>),
     5_000,
     [] as Array<{ address: string; family: number }>,
   );
   const v4 = addrs.filter((a) => a.family === 4).map((a) => a.address);
   const v6 = addrs.filter((a) => a.family === 6).map((a) => a.address);
-  const cname = await dnsTimeout(resolveCname(hostname).then((r) => r[0]), 3_000, undefined);
+  const cname = await dnsTimeout((await import('node:dns/promises')).resolveCname(hostname).then((r) => r[0]), 3_000, undefined);
   const ips = [...new Set([...v4, ...v6])].slice(0, MAX_IPS);
   await Promise.allSettled(ips.map(async (ip) => {
-    const ptr = await dnsTimeout(reverse(ip).then((r) => r[0]), 2_000, undefined);
+    const ptr = await dnsTimeout((await import('node:dns/promises')).reverse(ip).then((r) => r[0]), 2_000, undefined);
     if (ptr) ptrs.set(ip, ptr);
   }));
   const r: Resolution = { ips, ptrs };
@@ -82,56 +91,218 @@ export async function resolveHost(hostname: string): Promise<Resolution> {
   return r;
 }
 
-// ---------- TLS probe (plain-HTTP probes elicit nothing from TLS ports) ----------
+// ---------- TLS probe + HTTP recon in one connection ----------
 
-interface TlsProbe {
+interface HttpRecon {
   open: boolean;
   protocol?: string | undefined;
   cn?: string | undefined;
   issuer?: string | undefined;
   sans: string[];
+  isHttp: boolean;
+  status: number;
+  headers: Record<string, string>;
+  body: string;
 }
 
-export function probeTls(host: string, port: number, timeoutMs: number): Promise<TlsProbe> {
+function parseHttpResponse(raw: string): { isHttp: boolean; status: number; headers: Record<string, string>; body: string } {
+  const idx = raw.indexOf('\r\n\r\n');
+  const head = idx >= 0 ? raw.slice(0, idx) : raw;
+  const body = idx >= 0 ? raw.slice(idx + 4) : '';
+  const lines = head.split('\r\n');
+  const statusLine = lines[0] ?? '';
+  const sm = /^HTTP\/[\d.]+\s+(\d{3})/.exec(statusLine);
+  if (!sm) return { isHttp: false, status: 0, headers: {}, body: '' };
+  const headers: Record<string, string> = {};
+  for (const line of lines.slice(1)) {
+    const c = line.indexOf(':');
+    if (c > 0) headers[line.slice(0, c).trim().toLowerCase()] = line.slice(c + 1).trim();
+  }
+  return { isHttp: true, status: Number(sm[1]), headers, body };
+}
+
+const HTTP_PROBE_REQUEST = (host: string, path: string): string =>
+  `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: rsec-recon/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
+
+function collect(sock: Socket, capBytes: number, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    const socket: TLSSocket = tlsConnect({ host, port, servername: host, rejectUnauthorized: false });
+    let data = '';
     let settled = false;
-    let timer: NodeJS.Timeout;
-    const done = (r: TlsProbe) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        socket.destroy();
-        resolve(r);
-      }
+    const finish = () => {
+      if (!settled) { settled = true; sock.destroy(); resolve(data); }
     };
-    timer = setTimeout(() => done({ open: false, sans: [] }), timeoutMs);
-    socket.once('secureConnect', () => {
-      const cert = socket.getPeerCertificate(true);
-      const cnRaw = cert.subject?.CN;
-      const issuerRaw = cert.issuer?.O ?? cert.issuer?.OU;
-      done({
-        open: true,
-        protocol: socket.getProtocol() ?? undefined,
-        cn: typeof cnRaw === 'string' ? cnRaw : Array.isArray(cnRaw) ? cnRaw.join(', ') : undefined,
-        issuer: typeof issuerRaw === 'string' ? issuerRaw : Array.isArray(issuerRaw) ? issuerRaw.join(', ') : undefined,
-        sans: (cert.subjectaltname ?? '').split(', ').filter((s: string) => s.startsWith('DNS:')).map((s: string) => s.slice(4)),
-      });
+    sock.on('data', (chunk: Buffer) => {
+      data += chunk.toString('latin1');
+      if (data.length >= capBytes) finish();
     });
-    socket.once('error', () => done({ open: false, sans: [] }));
-    socket.once('timeout', () => done({ open: false, sans: [] }));
+    sock.on('close', finish);
+    sock.on('error', finish);
+    setTimeout(finish, timeoutMs);
   });
 }
 
-// ---------- banner-derived OS hint (honest: low confidence, unknown stays unknown) ----------
+/**
+ * One connection per port: TLS handshake (cert details) + HTTP GET /
+ * (headers + bounded body). For plain ports, plain socket.
+ */
+export function httpRecon(host: string, port: number, hostname: string, useTls: boolean): Promise<HttpRecon> {
+  return new Promise((resolve) => {
+    const req = HTTP_PROBE_REQUEST(hostname, '/');
+    const finishTls = (socket: TLSSocket) => {
+      const cert = socket.getPeerCertificate(true);
+      collect(socket, RECON_BODY_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => {
+        const parsed = parseHttpResponse(raw);
+        resolve({
+          open: true,
+          protocol: socket.getProtocol() ?? undefined,
+          cn: typeof cert.subject?.CN === 'string' ? cert.subject.CN : Array.isArray(cert.subject?.CN) ? cert.subject.CN.join(', ') : undefined,
+          issuer: typeof cert.issuer?.O === 'string' ? cert.issuer.O : Array.isArray(cert.issuer?.O) ? cert.issuer.O.join(', ') : undefined,
+          sans: (cert.subjectaltname ?? '').split(', ').filter((s: string) => s.startsWith('DNS:')).map((s: string) => s.slice(4)),
+          isHttp: parsed.isHttp,
+          status: parsed.status,
+          headers: parsed.headers,
+          body: parsed.body,
+        });
+      });
+    };
+    if (useTls) {
+      const socket: TLSSocket = tlsConnect({ host, port, servername: hostname, rejectUnauthorized: false });
+      let settled = false;
+      const fail = () => { if (!settled) { settled = true; socket.destroy(); resolve({ open: false, sans: [], isHttp: false, status: 0, headers: {}, body: '' }); } };
+      socket.once('secureConnect', () => {
+        settled = true;
+        finishTls(socket);
+      });
+      socket.once('error', fail);
+      socket.setTimeout(RECON_TIMEOUT_MS, fail);
+    } else {
+      const socket: Socket = netConnect({ host, port });
+      let settled = false;
+      const fail = () => { if (!settled) { settled = true; socket.destroy(); resolve({ open: false, sans: [], isHttp: false, status: 0, headers: {}, body: '' }); } };
+      socket.on('connect', () => {
+        if (!settled) {
+          settled = true;
+          socket.write(req);
+          collect(socket, RECON_BODY_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => {
+            const parsed = parseHttpResponse(raw);
+            resolve({ open: true, sans: [], isHttp: parsed.isHttp, status: parsed.status, headers: parsed.headers, body: parsed.body });
+          });
+        }
+      });
+      socket.on('error', fail);
+      // Filtered ports never connect or error — the timeout must resolve the promise.
+      socket.setTimeout(RECON_TIMEOUT_MS, fail);
+    }
+  });
+}
+
+/** Favicon fetch + murmur3 hash (shodan-style favicon3 lookup value). */
+export function fetchFaviconHash(host: string, port: number, hostname: string, useTls: boolean): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const req = HTTP_PROBE_REQUEST(hostname, '/favicon.ico');
+    const finish = (raw: string) => {
+      const idx = raw.indexOf('\r\n\r\n');
+      const body = idx >= 0 ? raw.slice(idx + 4) : '';
+      // Only hash an actual favicon — an HTML 404 page would produce a meaningless hash.
+      const trimmed = body.trimStart();
+      const isHtml = /^<(!doctype|html|\?xml)/i.test(trimmed);
+      const clean = body.length > 4 && !isHtml ? body.slice(0, FAVICON_CAP) : undefined;
+      resolve(clean !== undefined ? murmur3Hex(clean) : undefined);
+    };
+    if (useTls) {
+      const socket: TLSSocket = tlsConnect({ host, port, servername: hostname, rejectUnauthorized: false });
+      socket.once('secureConnect', () => socket.write(req));
+      collect(socket, FAVICON_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => { socket.destroy(); finish(raw); });
+      socket.once('error', () => resolve(undefined));
+    } else {
+      const socket: Socket = netConnect({ host, port });
+      socket.on('connect', () => socket.write(req));
+      collect(socket, FAVICON_CAP + 4096, RECON_TIMEOUT_MS).then((raw) => { socket.destroy(); finish(raw); });
+      socket.once('error', () => resolve(undefined));
+      socket.setTimeout(RECON_TIMEOUT_MS, () => socket.destroy());
+    }
+  });
+}
+
+// ---------- murmur3 x86_32 (shodan favicon-hash compatible) ----------
+
+export function murmur3Hex(input: string): string {
+  const data = Buffer.from(input, 'latin1');
+  const c1 = 0xcc9e2d51;
+  const c2 = 0x1b873593;
+  let h1 = 0;
+  const rounded = Math.floor(data.length / 4);
+  const read32 = (i: number): number => data.readUInt32LE(i * 4);
+  const rotl = (x: number, r: number): number => ((x << r) | (x >>> (32 - r))) >>> 0;
+  const mix = (k1: number): void => {
+    h1 = (h1 ^ Math.imul(rotl(Math.imul(k1, c1) >>> 0, 15), c2)) >>> 0;
+    h1 = ((h1 << 13) | (h1 >>> 19)) >>> 0;
+    h1 = (((Math.imul(h1, 5) >>> 0) + 0xe6546b64) >>> 0);
+  };
+  for (let i = 0; i < rounded; i++) mix(read32(i));
+  const tail = data.slice(rounded * 4);
+  let k1 = 0;
+  if (tail.length >= 3) k1 ^= tail[2]! << 16;
+  if (tail.length >= 2) k1 ^= tail[1]! << 8;
+  if (tail.length >= 1) {
+    k1 ^= tail[0]!;
+    h1 = (h1 ^ Math.imul(rotl(Math.imul(k1, c1) >>> 0, 15), c2)) >>> 0;
+  }
+  h1 = (h1 ^ data.length) >>> 0;
+  h1 ^= h1 >>> 16;
+  h1 = Math.imul(h1, 0x85ebca6b) >>> 0;
+  h1 ^= h1 >>> 13;
+  h1 = Math.imul(h1, 0xc2b2ae35) >>> 0;
+  h1 ^= h1 >>> 16;
+  return (h1 >>> 0).toString(16).padStart(8, '0');
+}
+
+// ---------- tech-stack / WAF / CDN signatures ----------
+
+const EDGE_HEADER_SIGS: Array<[RegExp, string]> = [
+  [/^cf-ray$/i, 'Cloudflare (CDN/WAF)'],
+  [/^cf-cache-status$/i, 'Cloudflare (CDN/WAF)'],
+  [/^x-amz-cf-/i, 'AWS CloudFront (CDN)'],
+  [/^x-akamai-/i, 'Akamai (CDN/WAF)'],
+  [/^x-sucuri-id$/i, 'Sucuri (WAF)'],
+  [/^x-vercel-id$/i, 'Vercel (edge)'],
+  [/^x-fastly-/i, 'Fastly (CDN)'],
+  [/^x-msedge-ref$/i, 'Azure Front Door (edge)'],
+  [/^x-github-request-id$/i, 'GitHub Pages'],
+  [/^x-litespeed-cache$/i, 'LiteSpeed (server/CDN)'],
+];
+
+interface TechSig {
+  re: RegExp;
+  product: string;
+  note?: string | undefined;
+}
+
+const TECH_SIGNATURES: TechSig[] = [
+  { re: /^x-jenkins:\s*(.+)$/im, product: 'Jenkins', note: 'CI/CD controller — high-value target, must not be publicly writable' },
+  { re: /<title>[^<]*Grafana/i, product: 'Grafana', note: 'dashboard/login exposed' },
+  { re: /<title>[^<]*Jenkins/i, product: 'Jenkins', note: 'CI/CD controller' },
+  { re: /Apache Tomcat\/([\d.]+)/i, product: 'Apache Tomcat' },
+  { re: /Kubernetes Dashboard/i, product: 'Kubernetes Dashboard', note: 'cluster control plane UI' },
+  { re: /"kind"\s*:\s*"Status"[\s\S]{0,400}Forbidden/, product: 'Kubernetes API (unauth)', note: 'API server answers unauthenticated requests' },
+  { re: /You Know, for Search/i, product: 'Elasticsearch', note: 'HTTP API reachable' },
+  { re: /phpMyAdmin/i, product: 'phpMyAdmin', note: 'database admin UI exposed' },
+  { re: /WebLogic/i, product: 'Oracle WebLogic' },
+  { re: /GlassFish/i, product: 'GlassFish' },
+  { re: /Kibana/i, product: 'Kibana' },
+  { re: /SonarQube/i, product: 'SonarQube' },
+  { re: /Powered by Jetty/i, product: 'Jetty' },
+  { re: /MinIO/i, product: 'MinIO console' },
+  { re: /Welcome to nginx/i, product: 'nginx default page', note: 'default landing page — deployment not customized' },
+  { re: /Apache2 Default Page|<title>Apache2/i, product: 'Apache default page', note: 'default landing page — deployment not customized' },
+  { re: /<title>IIS Windows Server/i, product: 'IIS default page', note: 'default landing page — deployment not customized' },
+];
 
 function osHint(banner: string): string | undefined {
   if (/microsoft-iis|asp\.net|windows-server/i.test(banner)) return 'Windows';
   if (/ubuntu|debian|centos|red\s*hat|fedora/i.test(banner)) return 'Linux/Unix';
   return undefined;
 }
-
-const EDGE_INDICATORS = /cloudflare|cloudfront|akamai|fastly|sucuri|envoy|gws/i;
 
 // ---------- Engine ----------
 
@@ -192,7 +363,7 @@ export class HostInfraEngine implements Engine {
 
     // ---- active: bounded port scan of resolved IPs ----
     const ports = [...new Set([targetPort, ...WEB_PORTS, ...INFRA_PORTS])];
-    interface OpenPort { port: number; banner?: string; tls?: TlsProbe }
+    interface OpenPort { port: number; banner?: string; recon?: HttpRecon }
     const byIp = new Map<string, OpenPort[]>();
 
     for (const ip of res.ips) {
@@ -201,9 +372,10 @@ export class HostInfraEngine implements Engine {
         if (ctx.signal.aborted) break;
         const batch = ports.slice(i, i + PORT_BATCH);
         const results = await Promise.allSettled(batch.map(async (port) => {
-          if (TLS_PORTS.has(port)) {
-            const tls = await probeTls(ip, port, PROBE_TIMEOUT_MS);
-            return tls.open ? { port, tls } : null;
+          if (TLS_PORTS.has(port) || HTTP_PORTS.has(port) || port === targetPort) {
+            // one connection: TLS handshake (if TLS) + GET / recon
+            const recon = await httpRecon(ip, port, hostname, TLS_PORTS.has(port));
+            return recon.open ? { port, recon } : null;
           }
           const { open, banner } = await scanPort(ip, port, PROBE_TIMEOUT_MS);
           const r: { port: number; banner?: string } | null = open ? { port } : null;
@@ -212,10 +384,10 @@ export class HostInfraEngine implements Engine {
         }));
         for (const r of results) {
           if (r.status !== 'fulfilled' || r.value === null) continue;
-          const v = r.value as { port: number; banner?: string; tls?: TlsProbe };
+          const v = r.value as { port: number; banner?: string; recon?: HttpRecon };
           const list = byIp.get(ip) ?? [];
           const entry: OpenPort = { port: v.port };
-          if (v.tls !== undefined) entry.tls = v.tls;
+          if (v.recon !== undefined) entry.recon = v.recon;
           else if (v.banner !== undefined) entry.banner = v.banner;
           list.push(entry);
           byIp.set(ip, list);
@@ -229,20 +401,21 @@ export class HostInfraEngine implements Engine {
 
     let edgeNoted = false;
     for (const [ip, ops] of byIp) {
-      const portList = ops.map((o) => `${o.port}${o.tls ? '/tls' : '/tcp'}`).join(', ');
+      const portList = ops.map((o) => `${o.port}${o.recon?.protocol !== undefined ? '/tls' : 'tcp'}`).join(', ');
       const evidence: Evidence[] = [];
       for (const op of ops) {
-        if (op.tls !== undefined) {
+        if (op.recon !== undefined && op.recon.protocol !== undefined) {
           evidence.push({
             kind: 'process',
             command: `TLS handshake ${ip}:${op.port}`,
-            observation: `protocol=${op.tls.protocol ?? 'unknown'} CN=${op.tls.cn ?? 'n/a'} issuer=${op.tls.issuer ?? 'n/a'} SANs=${op.tls.sans.slice(0, 8).join(',') || 'none'}`,
+            observation: `protocol=${op.recon.protocol} CN=${op.recon.cn ?? 'n/a'} issuer=${op.recon.issuer ?? 'n/a'} SANs=${op.recon.sans.slice(0, 8).join(',') || 'none'} HTTP status=${op.recon.isHttp ? op.recon.status : 'non-http'}`,
           });
         } else {
+          const bannerStr = op.recon?.isHttp ? `HTTP ${op.recon.status}` : (op.banner ?? '(no banner)');
           evidence.push({
             kind: 'process',
             command: `TCP connect ${ip}:${op.port}`,
-            observation: `Banner: ${(op.banner ?? '').slice(0, 200) || '(no banner)'}`,
+            observation: `Banner: ${bannerStr.slice(0, 200)}`,
           });
         }
       }
@@ -263,7 +436,9 @@ export class HostInfraEngine implements Engine {
 
       for (const op of ops) {
         const bannerStr = op.banner ?? '';
-        const fp: ServiceFingerprint = op.tls !== undefined ? { service: 'https' } : fingerprint(op.port, bannerStr);
+        const fp: ServiceFingerprint = op.recon !== undefined && op.recon.protocol !== undefined
+          ? { service: 'https' }
+          : fingerprint(op.port, bannerStr || (op.recon?.isHttp ? 'HTTP/' : ''));
         const cves = matchServiceCves(fp);
 
         if (fp.product !== undefined || fp.version !== undefined) {
@@ -283,6 +458,120 @@ export class HostInfraEngine implements Engine {
             }],
             explanation: 'The service discloses its product and version in its banner. This is reconnaissance information.',
             remediation: 'Suppress version banners or restrict access to the service.',
+            references: [],
+          });
+        }
+
+        // ---- deep HTTP recon findings ----
+        if (op.recon !== undefined && op.recon.isHttp) {
+          const r = op.recon;
+          const techHits: string[] = [];
+          // header-derived products
+          if (r.headers['server'] !== undefined) techHits.push(`Server: ${r.headers['server'].slice(0, 80)}`);
+          if (r.headers['x-powered-by'] !== undefined) techHits.push(`X-Powered-By: ${r.headers['x-powered-by'].slice(0, 80)}`);
+          for (const sig of TECH_SIGNATURES) {
+            const m = sig.re.exec(r.headers['x-jenkins'] !== undefined ? `${r.body}\nx-jenkins: ${r.headers['x-jenkins']}` : r.body);
+            if (m !== null && !techHits.some((t) => t.startsWith(sig.product))) {
+              techHits.push(`${sig.product}${m[1] ? ` ${m[1].trim().slice(0, 40)}` : ''}${sig.note !== undefined ? ` (${sig.note})` : ''}`);
+            }
+          }
+          // favicon hash (once per port)
+          if (ctx.signal.aborted === false) {
+            const fh = await fetchFaviconHash(ip, op.port, hostname, op.recon.protocol !== undefined);
+            if (fh !== undefined) techHits.push(`favicon mmh3=${fh} (look up on public favicon-hash indexes to correlate)`);
+          }
+          // WAF/CDN from response headers
+          const edgeProducts = new Set<string>();
+          for (const [re, product] of EDGE_HEADER_SIGS) {
+            for (const h of Object.keys(r.headers)) {
+              if (re.test(h)) edgeProducts.add(product);
+            }
+          }
+          const serverHeader = r.headers['server'] ?? '';
+          if (/cloudflare|cloudfront|akamai|fastly|sucuri|envoy|gws/i.test(serverHeader)) edgeProducts.add(serverHeader.trim().slice(0, 40));
+
+          if (techHits.length > 0) {
+            findings.push({
+              rawId: 'service-identified',
+              title: `Service identified on ${ip}:${op.port}: ${techHits.slice(0, 3).join('; ').slice(0, 120)}`,
+              category: 'A01',
+              severity: 'info',
+              confidence: 'high',
+              status: 'confirmed',
+              asset,
+              locator: `${ip}:${op.port}`,
+              evidence: [{
+                kind: 'process',
+                command: `HTTP recon GET / ${ip}:${op.port}`,
+                observation: `HTTP ${r.status}; ${techHits.join('; ').slice(0, 400)}`,
+              }],
+              explanation: 'Technology stack identified from response headers, body signatures and favicon hash. This narrows CVE hunting and shows accidental exposure of admin/dev tooling.',
+              remediation: 'Remove or restrict tooling that should not face the internet; suppress version-revealing headers.',
+              references: [],
+            });
+          }
+
+          if (!edgeNoted && edgeProducts.size > 0) {
+            edgeNoted = true;
+            findings.push({
+              rawId: 'edge-proxy-detected',
+              title: `Target fronted by edge/WAF: ${[...edgeProducts].slice(0, 2).join(', ')} — port surface reflects the edge, not the origin`,
+              category: 'A01',
+              severity: 'info',
+              confidence: 'high',
+              status: 'confirmed',
+              asset,
+              locator: res.ips[0]!,
+              evidence: [{
+                kind: 'process',
+                command: 'Response header analysis',
+                observation: `edge indicators: ${[...edgeProducts].join(', ')}`,
+              }],
+              explanation: 'CDN/WAF edge signatures were detected in response headers. Open ports observed here belong to the edge network; origin infrastructure is not directly reachable — scan results describe the public edge only.',
+              remediation: 'No action required; context for interpreting the port scan.',
+              references: [],
+            });
+          }
+
+          const adminProduct = techHits.find((t) =>
+            /jenkins|grafana|kubernetes|kibana|phpmyadmin|sonarqube|weblogic|glassfish|minio|tomcat/i.test(t));
+          if (MGMT_PORTS.has(op.port) || adminProduct !== undefined) {
+            findings.push({
+              rawId: 'management-interface-exposed',
+              title: `Management interface exposed on ${ip}:${op.port}${adminProduct !== undefined ? ` — ${adminProduct.slice(0, 80)}` : ''}`,
+              category: 'A02',
+              severity: 'high',
+              confidence: 'medium',
+              status: 'probable',
+              asset,
+              locator: `${ip}:${op.port}`,
+              evidence: [{
+                kind: 'process',
+                command: `HTTP probe ${ip}:${op.port}`,
+                observation: `HTTP ${op.recon.status} on port ${op.port}${adminProduct !== undefined ? `; signature: ${adminProduct}` : ' — port commonly used for management interfaces'}`,
+              }],
+              explanation: 'A HTTP service was found on a management-typical port or matched an admin-console signature (CI/CD, dashboards, cluster APIs, DB UIs). Verify it is intended to be publicly reachable.',
+              remediation: 'Restrict management interfaces to internal networks/VPN and require strong authentication + MFA.',
+              references: [],
+            });
+          }
+        } else if (fp.product !== undefined && /tomcat|weblogic|glassfish/i.test(fp.product)) {
+          findings.push({
+            rawId: 'management-interface-exposed',
+            title: `Application server banner exposed on ${ip}:${op.port} — ${fp.product}`,
+            category: 'A02',
+            severity: 'high',
+            confidence: 'medium',
+            status: 'probable',
+            asset,
+            locator: `${ip}:${op.port}`,
+            evidence: [{
+              kind: 'process',
+              command: `Banner grab ${ip}:${op.port}`,
+              observation: `Banner: ${bannerStr.slice(0, 200)}`,
+            }],
+            explanation: 'An application-server banner was identified on this port. Such consoles/deploys frequently expose management endpoints.',
+            remediation: 'Restrict management interfaces to internal networks and require strong authentication.',
             references: [],
           });
         }
@@ -308,27 +597,6 @@ export class HostInfraEngine implements Engine {
           });
         }
 
-        if (fp.service === 'http' && (op.port === 8080 || op.port === 8443)) {
-          findings.push({
-            rawId: 'management-interface-exposed',
-            title: `Management interface exposed on ${ip}:${op.port}`,
-            category: 'A02',
-            severity: 'high',
-            confidence: 'medium',
-            status: 'probable',
-            asset,
-            locator: `${ip}:${op.port}`,
-            evidence: [{
-              kind: 'process',
-              command: `HTTP probe ${ip}:${op.port}`,
-              observation: `HTTP service detected on non-standard port ${op.port} — may be a management interface`,
-            }],
-            explanation: 'A HTTP service was found on a port commonly used for management interfaces. Verify it is not a Tomcat Manager, JBoss JMX, or similar admin console.',
-            remediation: 'Restrict management interfaces to internal networks and require strong authentication.',
-            references: [],
-          });
-        }
-
         const os = osHint(bannerStr);
         if (os !== undefined) {
           findings.push({
@@ -347,29 +615,6 @@ export class HostInfraEngine implements Engine {
             }],
             explanation: 'Banner strings hint at the operating system family. Banners can be spoofed or proxied — treat as a lead, not a fact.',
             remediation: 'Suppress version banners and platform indicators in service responses.',
-            references: [],
-          });
-        }
-
-        const serverM = /server:\s*([^\r\n]+)/i.exec(bannerStr);
-        if (!edgeNoted && serverM?.[1] !== undefined && EDGE_INDICATORS.test(serverM[1])) {
-          edgeNoted = true;
-          findings.push({
-            rawId: 'edge-proxy-detected',
-            title: `Target is fronted by an edge proxy (${serverM[1].trim().slice(0, 40)}) — port surface reflects the edge, not the origin`,
-            category: 'A01',
-            severity: 'info',
-            confidence: 'medium',
-            status: 'informational',
-            asset,
-            locator: res.ips[0]!,
-            evidence: [{
-              kind: 'process',
-              command: 'Server header analysis',
-              observation: `Server: ${serverM[1].trim().slice(0, 80)}`,
-            }],
-            explanation: 'The resolved IPs belong to a CDN/edge network. Open ports observed here are the edge\u2019s, and origin infrastructure is not directly reachable — scan results describe the public edge only.',
-            remediation: 'No action required; this is context for interpreting the port scan.',
             references: [],
           });
         }

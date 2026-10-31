@@ -164,8 +164,8 @@ test('host-infra: webapp target resolves hostname and port-scans resolved IPs (a
     assert.equal(resolved.length, 1, 'host-resolved finding emitted');
     const hosts = res.findings.filter((f: { rawId?: string }) => f.rawId === 'host-discovered');
     assert.ok(hosts.some((f: { title?: string }) => f.title?.includes(String(port))), 'open target port reported');
-    const svc = res.findings.filter((f: { rawId?: string }) => f.rawId === 'service-version-disclosed');
-    assert.ok(svc.length > 0, 'service version disclosed');
+    const svc = res.findings.filter((f: { rawId?: string }) => f.rawId === 'service-identified');
+    assert.ok(svc.length > 0, 'service identified (deep HTTP recon captures Server header)');
   } finally {
     server.close();
   }

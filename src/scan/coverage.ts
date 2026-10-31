@@ -125,9 +125,14 @@ function capabilitiesFor(engineId: string): Partial<Record<OwaspCategory, { note
       };
     case 'builtin.host-infra':
       return {
-        A01: { note: 'DNS resolution + open-port mapping of the registered target\u2019s infrastructure', strength: 'strong' },
-        A02: { note: 'management interface exposure on non-standard ports', strength: 'strong' },
+        A01: { note: 'DNS resolution + open-port mapping + tech-stack/WAF identification of the registered target\u2019s infrastructure', strength: 'strong' },
+        A02: { note: 'management interface / admin console exposure on non-standard ports', strength: 'strong' },
         A03: { note: 'infrastructure service version → CVE matching (offline advisories)', strength: 'strong' },
+      };
+    case 'builtin.asset-discovery':
+      return {
+        A01: { note: 'DNS records, CT-log subdomains, cert SANs, IP attribution (ASN/owner) for the registered domain space', strength: 'strong' },
+        A02: { note: 'AXFR zone-transfer attempt + public cloud bucket listability (active mode)', strength: 'strong' },
       };
     default:
       return {};

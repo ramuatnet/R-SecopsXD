@@ -80,7 +80,12 @@ export function fingerprint(port: number, banner: string): ServiceFingerprint {
     return r;
   }
   // Port-based fallback for well-known ports when banner doesn't match a known pattern
-  const portService: Record<number, string> = { 22: 'ssh', 80: 'http', 443: 'https', 3306: 'mysql', 5432: 'postgresql', 6379: 'redis', 27017: 'mongodb', 8080: 'http', 8443: 'https' };
+  const portService: Record<number, string> = {
+    22: 'ssh', 80: 'http', 443: 'https', 3306: 'mysql', 5432: 'postgresql', 6379: 'redis', 27017: 'mongodb', 8080: 'http', 8443: 'https',
+    21: 'ftp', 23: 'telnet', 25: 'smtp', 135: 'msrpc', 139: 'netbios-ssn', 445: 'smb', 3000: 'http', 5000: 'http', 7001: 'weblogic',
+    4848: 'glassfish', 5900: 'vnc', 5984: 'couchdb', 6443: 'kubernetes-api', 8000: 'http', 8008: 'http', 8081: 'http', 8888: 'http',
+    9000: 'http', 9090: 'http', 9200: 'elasticsearch', 11211: 'memcached', 2375: 'docker-api', 2376: 'docker-tls',
+  };
   if (portService[port] !== undefined) {
     const r: ServiceFingerprint = { service: portService[port] };
     if (banner.length > 0) r.product = banner.slice(0, 80).trim();
