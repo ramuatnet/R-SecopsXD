@@ -44,6 +44,16 @@ export interface RequestOptions {
   contentType?: string;
 }
 
+/**
+ * D3 binding: per-scan view of the process-wide SafetyGovernor. The scanId
+ * and profile are bound by the orchestrator; the client only supplies the
+ * asset key (host) per request.
+ */
+export interface GovernorBinding {
+  acquire(assetKey: string): Promise<{ allowed: boolean; reason?: string }>;
+  onResponse(assetKey: string, status: number, latencyMs: number): void;
+}
+
 export class ScopedHttpClient {
   private readonly guard: ScopeGuard;
   private readonly limiter: RateLimiter;
@@ -51,6 +61,7 @@ export class ScopedHttpClient {
   private readonly opts: HttpClientOptions;
   private readonly stats: RequestStats;
   private readonly signal: AbortSignal | undefined;
+  private readonly governor: GovernorBinding | undefined;
 
   constructor(
     guard: ScopeGuard,
@@ -59,6 +70,7 @@ export class ScopedHttpClient {
     opts: HttpClientOptions,
     stats: RequestStats,
     signal?: AbortSignal,
+    governor?: GovernorBinding,
   ) {
     this.guard = guard;
     this.limiter = limiter;
@@ -66,6 +78,7 @@ export class ScopedHttpClient {
     this.opts = opts;
     this.stats = stats;
     this.signal = signal;
+    this.governor = governor;
   }
 
   async request(method: string, rawUrl: string, reqOpts: RequestOptions = {}): Promise<HttpResult> {
@@ -84,6 +97,18 @@ export class ScopedHttpClient {
     const release = await this.semaphore.acquire(this.signal).catch(() => null);
     if (!release) return { ok: false, blocked: 'aborted', url: rawUrl };
     try {
+      let assetKey = this.guard.origin.host;
+      try { assetKey = new URL(rawUrl).host; } catch { /* keep origin host */ }
+      if (this.governor !== undefined) {
+        const decision = await this.governor.acquire(assetKey);
+        if (!decision.allowed) {
+          this.stats.blocked++;
+          return { ok: false, blocked: `safety governor: ${decision.reason ?? 'refused'}`, url: rawUrl };
+        }
+        const result = await this.doRequest(method.toUpperCase(), rawUrl, reqOpts, 0, []);
+        if (result.ok) this.governor.onResponse(assetKey, result.status, result.elapsedMs);
+        return result;
+      }
       return await this.doRequest(method.toUpperCase(), rawUrl, reqOpts, 0, []);
     } finally {
       release();

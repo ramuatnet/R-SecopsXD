@@ -16,6 +16,8 @@ export interface Config {
   requestTimeoutMs: number;
   engineTimeoutMs: number;
   scanTimeoutMs: number;
+  /** D3: safety-governor profile (gentle/normal/aggressive). */
+  scanProfile: 'gentle' | 'normal' | 'aggressive';
   maxCrawlPages: number;
   /** Set when OWASP_MAX_CRAWL_PAGES was provided explicitly — overrides profile caps. */
   maxCrawlPagesExplicit: boolean;
@@ -57,6 +59,11 @@ export function loadConfig(): Config {
     requestTimeoutMs: num('OWASP_REQUEST_TIMEOUT_MS', 15_000),
     engineTimeoutMs: num('OWASP_ENGINE_TIMEOUT_MS', 600_000),
     scanTimeoutMs: num('OWASP_SCAN_TIMEOUT_MS', 1_800_000),
+    /** D3: safety-governor profile — gentle/normal/aggressive request ceilings. */
+    scanProfile: ((): 'gentle' | 'normal' | 'aggressive' => {
+      const raw = (process.env['OWASP_SCAN_PROFILE'] ?? 'normal').trim().toLowerCase();
+      return raw === 'gentle' || raw === 'aggressive' ? raw : 'normal';
+    })(),
     maxCrawlPages: num('OWASP_MAX_CRAWL_PAGES', 30),
     maxCrawlPagesExplicit: bool('OWASP_MAX_CRAWL_PAGES_EXPLICIT', false),
     logLevel: (['debug', 'info', 'warn', 'error'].includes(level ?? '')

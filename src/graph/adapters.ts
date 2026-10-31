@@ -107,7 +107,19 @@ export function easmAdapter(f: Finding): AdapterOutput {
     return { events, nodes, edges };
   }
 
-  // everything else (cert SANs, DNS records, OS hints, ...) is an observation on the domain asset
+  if (rawIds.includes('os-hint')) {
+    // E2: banner-derived OS hypothesis → os node + ip runs os (low confidence by design)
+    const ip = f.locator.trim();
+    const osName = /OS hint: ([^ ]+(?: Unix)?)/.exec(f.title)?.[1]?.trim() ?? 'unknown';
+    const osNode = { type: 'os' as const, identity: `${ip}:${osName.toLowerCase()}`, display: `${osName} (hypothesis) on ${ip}`, attributes: { confidence: f.confidence, source: 'banner' } };
+    return {
+      events: [ev('easm', 'os.hypothesis', 'observed', assetUid('os', osNode.identity), f, [{ kind: 'text' as const, value: osName }])],
+      nodes: [osNode, hostNode(ip)],
+      edges: [{ edgeType: 'runs', src: hostNode(ip), dst: osNode, provenance: ['easm'] }],
+    };
+  }
+
+  // everything else (cert SANs, DNS records, ...) is an observation on the domain asset
   const domain = f.asset.trim().toLowerCase();
   return {
     events: [ev('easm', 'dns.observed', 'observed', assetUid('domain', domain), f,

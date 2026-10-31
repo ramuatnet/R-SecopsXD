@@ -122,6 +122,23 @@ export class SafetyGovernor {
     return { allowed: true };
   }
 
+  /**
+   * Wait-based acquire for the live scan path: rate-limit refusals WAIT for a
+   * token (bounded), while kill switch / scan ceiling / circuit breaker refuse
+   * hard. This keeps engines running at the profile's pace instead of
+   * silently dropping probes.
+   */
+  async acquireWait(assetKey: string, scanId: string, sensorId = 'in-process', maxWaitMs = 30_000): Promise<GovernorDecision> {
+    const deadline = Date.now() + maxWaitMs;
+    for (;;) {
+      const d = this.acquire(assetKey, scanId, sensorId);
+      if (d.allowed) return d;
+      if (!d.reason?.includes('rate limit')) return d; // hard refusal
+      if (Date.now() >= deadline) return d;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   /** Feed every response back — 429/503 halves the asset rate with backoff. */
   onResponse(assetKey: string, status: number, latencyMs: number): void {
     if (status === 429 || status === 503) {

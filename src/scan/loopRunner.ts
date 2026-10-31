@@ -36,6 +36,8 @@ export interface LoopRunnerDeps {
   db: Database;
   config: Config;
   registry: EngineRegistry;
+  /** D3: shared process-wide governor (optional; loop scans honor budgets when present). */
+  governor?: import('../safety/governor.ts').SafetyGovernor;
 }
 
 export interface LoopScanResult {
@@ -66,9 +68,13 @@ export async function runLoopScan(
   const stats: RequestStats = { sent: 0, blocked: 0 };
   const limiter = new RateLimiter(config.rateLimitPerSecond, config.rateBurst);
   const semaphore = new Semaphore(config.maxConcurrency);
+  const governorBinding = deps.governor === undefined ? undefined : {
+    acquire: async (assetKey: string) => deps.governor!.acquireWait(assetKey, scanId),
+    onResponse: (assetKey: string, status: number, latencyMs: number) => deps.governor!.onResponse(assetKey, status, latencyMs),
+  };
   const client = new ScopedHttpClient(guard, limiter, semaphore, {
     timeoutMs: config.requestTimeoutMs, maxRedirectHops: 5,
-  }, stats, signal);
+  }, stats, signal, governorBinding);
 
   // Seed a bounded crawl so the corpus and discoveredEndpoints are populated
   const crawler = new CrawlerLiteEngine(config.maxCrawlPages);

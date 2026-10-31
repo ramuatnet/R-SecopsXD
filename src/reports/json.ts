@@ -3,6 +3,7 @@
  */
 import type { CoverageReport, Evidence, Finding, Scan } from '../core/types.ts';
 import { redactHeaders, redactText } from '../core/redact.ts';
+import { riskForFinding } from '../risk/attach.ts';
 
 export interface JsonReport {
   schema: 'owasp-assessment-platform/report';
@@ -17,7 +18,9 @@ export interface JsonReport {
     enginesRun: string[];
     enginesUnavailable: string[];
   };
-  findings: Finding[];
+  findings: Array<Finding & { risk: ReturnType<typeof riskForFinding> }>;
+  /** F4: explainable risk bands over the attached per-finding risk model. */
+  riskSummary: Record<string, number>;
   coverage: CoverageReport[];
   disclaimer: string;
 }
@@ -83,10 +86,21 @@ export function buildJsonReport(scan: Scan, findings: Finding[], generatedAt = n
       enginesRun: scan.engines.filter((e) => e.status === 'ran').map((e) => e.engine),
       enginesUnavailable: scan.engines.filter((e) => e.status === 'unavailable').map((e) => e.engine),
     },
-    findings: findings.map(redactFindingEvidence),
+    findings: findings.map((f) => ({ ...redactFindingEvidence(f), risk: riskForFinding(f) })),
+    riskSummary: buildRiskSummary(findings),
     coverage: scan.coverage,
     disclaimer: DISCLAIMER,
   };
+}
+
+/** F4: per-band counts over the attached risk model. */
+function buildRiskSummary(findings: Finding[]): Record<string, number> {
+  const out: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const f of findings) {
+    const band = riskForFinding(f).band;
+    out[band] = (out[band] ?? 0) + 1;
+  }
+  return out;
 }
 
 export { DISCLAIMER };

@@ -2,6 +2,7 @@
  * Self-contained HTML report (print-friendly, no external assets).
  */
 import type { CoverageReport, Finding, Scan } from '../core/types.ts';
+import { riskForFinding } from '../risk/attach.ts';
 import { OWASP_CATEGORIES } from '../core/owasp.ts';
 import { DISCLAIMER, redactFindingEvidence } from './json.ts';
 
@@ -18,12 +19,14 @@ export function buildHtmlReport(scan: Scan, rawFindings: Finding[], generatedAt 
   const findings = rawFindings.map(redactFindingEvidence);
   const sorted = [...findings].sort((a, b) => sevRank(b.severity) - sevRank(a.severity));
   const sev = countBy(sorted, (f) => f.severity);
+  let risk: ReturnType<typeof riskForFinding>;
   const status = countBy(sorted, (f) => f.status);
   const ranEngines = scan.engines.filter((e) => e.status === 'ran');
   const unavailable = scan.engines.filter((e) => e.status === 'unavailable' || e.status === 'failed');
 
   const findingsHtml = sorted.map((f, i) => `
   <section class="finding">
+    ${(() => { risk = riskForFinding(f); return ''; })()}
     <h3><span class="num">#${i + 1}</span> ${esc(f.title)}</h3>
     <div class="badges">
       <span class="badge cat">${f.category} · ${esc(OWASP_CATEGORIES[f.category].name)}</span>
@@ -40,6 +43,7 @@ export function buildHtmlReport(scan: Scan, rawFindings: Finding[], generatedAt 
       <tr><th>Detected</th><td>${esc(f.detectedAt)}</td></tr>
       <tr><th>Stable ID</th><td><code>${esc(f.id)}</code></td></tr>
       <tr><th>Engines</th><td>${esc(f.provenance.map((p) => `${p.engine}${p.rawId ? ` (${p.rawId})` : ''}`).join(', '))}</td></tr>
+      <tr><th>Risk</th><td><strong>${risk.score} ${risk.band}</strong> — factors: base ${risk.factors.base} × reachability ${risk.factors.reachability} × exposure ${risk.factors.exposure} × criticality ${risk.factors.criticality} × blast ${risk.factors.blast}${risk.backlog ? ' · <em>backlog</em>' : ''}</td></tr>
     </table>
     <h4>Explanation</h4><p>${esc(f.explanation)}</p>
     <h4>Remediation</h4><p>${esc(f.remediation)}</p>

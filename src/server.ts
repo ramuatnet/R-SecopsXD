@@ -8,6 +8,10 @@ import { loadConfig, type Config } from './config.ts';
 import { Database, generateToken } from './db/database.ts';
 import { EngineRegistry } from './engines/registry.ts';
 import { Orchestrator } from './scan/orchestrator.ts';
+import { InProcessBus } from './bus/bus.ts';
+import { ScopeGate } from './safety/scopeGate.ts';
+import { SafetyGovernor } from './safety/governor.ts';
+import { ScanRequestDispatcher } from './orchestration/dispatcher.ts';
 import { Router, errorResponse, jsonResponse, ApiError, type Handler, type RequestContext } from './api/router.ts';
 import { withAuth } from './api/auth.ts';
 import * as h from './api/handlers.ts';
@@ -53,7 +57,17 @@ export function buildPlatform(config = loadConfig()): Platform {
   setLogLevel(config.logLevel);
   const db = new Database(config.dataDir);
   const registry = new EngineRegistry(config);
-  const orchestrator = new Orchestrator(db, config, registry);
+  // D1/D3/D4/D5: process-wide orchestration fabric — bus, scope approvals,
+  // safety governor, and the scan-request dispatcher closing the loop.
+  const bus = new InProcessBus();
+  const scopeGate = new ScopeGate();
+  for (const t of db.listTargets()) {
+    if (t.kind === 'webapp' && t.origin !== '') scopeGate.register('origin', t.origin, t.approved);
+  }
+  const governor = new SafetyGovernor(config.scanProfile);
+  const orchestrator = new Orchestrator(db, config, registry, { bus, scopeGate, governor });
+  const dispatcher = new ScanRequestDispatcher({ bus, orchestrator, db });
+  dispatcher.start();
 
   // Auth token: env override > persisted file > generated (persisted to file).
   const tokenFile = join(config.dataDir, 'auth-token.txt');

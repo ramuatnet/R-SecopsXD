@@ -28,6 +28,11 @@ import { runLoopScan } from './loopRunner.ts';
 import { GraphStore } from '../graph/graph.ts';
 import { EventStore } from '../graph/merger.ts';
 import { syncFindingsToGraph } from '../graph/sync.ts';
+import { SafetyGovernor } from '../safety/governor.ts';
+import { ScopeGate } from '../safety/scopeGate.ts';
+import type { Bus } from '../bus/bus.ts';
+import { triggerForPort } from '../orchestration/assessAsset.ts';
+import type { GovernorBinding } from './httpClient.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
 import { log } from '../logging.ts';
@@ -42,18 +47,41 @@ function emptyStats(): ScanStats {
   };
 }
 
+export interface OrchestrationDeps {
+  /** D1: event bus for discovery.asset / scan.request / approval.gate traffic. */
+  bus?: Bus;
+  /** D4: scope approvals — required for trigger emission to mean anything. */
+  scopeGate?: ScopeGate;
+  /** D3: shared process-wide governor (created per-orchestrator when omitted). */
+  governor?: SafetyGovernor;
+}
+
 export class Orchestrator {
   private readonly db: Database;
   private readonly config: Config;
   private readonly registry: EngineRegistry;
   private readonly scanControl = new Map<string, AbortController>();
   private readonly scanSlots: Semaphore;
+  private readonly bus: Bus | undefined;
+  private readonly scopeGate: ScopeGate | undefined;
+  private readonly governor: SafetyGovernor;
 
-  constructor(db: Database, config: Config, registry: EngineRegistry) {
+  constructor(db: Database, config: Config, registry: EngineRegistry, deps: OrchestrationDeps = {}) {
     this.db = db;
     this.config = config;
     this.registry = registry;
     this.scanSlots = new Semaphore(config.maxConcurrentScans);
+    this.bus = deps.bus;
+    this.scopeGate = deps.scopeGate;
+    this.governor = deps.governor ?? new SafetyGovernor(config.scanProfile);
+  }
+
+  /** Per-scan governor binding (scanId-bound ceilings, assetKey per host). */
+  private governorBinding(scanId: string): GovernorBinding {
+    return {
+      acquire: async (assetKey) => this.governor.acquireWait(assetKey, scanId),
+      onResponse: (assetKey, status, latencyMs) => this.governor.onResponse(assetKey, status, latencyMs),
+    };
   }
 
   /**
@@ -90,6 +118,11 @@ export class Orchestrator {
       coverage: [],
       stats: emptyStats(),
     };
+    // D4: a started scan on an approved target is the authoritative scope approval.
+    if (this.scopeGate !== undefined && target.kind === 'webapp' && target.origin !== '') {
+      this.scopeGate.register('origin', target.origin, true);
+      this.scopeGate.approve('origin', target.origin, 'scan-started');
+    }
     this.db.insertScan(scan);
     this.db.audit({ actor: 'operator', action: 'scan.started', details: { scanId: scan.id, targetId, profileId, mode } });
 
@@ -144,7 +177,7 @@ export class Orchestrator {
     if (this.config.loopEnabled && target.kind === 'webapp') {
       try {
         const result = await runLoopScan(scanId, target, mode, {
-          db: this.db, config: this.config, registry: this.registry,
+          db: this.db, config: this.config, registry: this.registry, governor: this.governor,
         }, signal);
         this.db.updateScan(scanId, {
           status: 'completed',
@@ -202,7 +235,7 @@ export class Orchestrator {
     const client = new ScopedHttpClient(guard, limiter, semaphore, {
       timeoutMs: this.config.requestTimeoutMs,
       maxRedirectHops: 5,
-    }, stats, signal);
+    }, stats, signal, this.governorBinding(scanId));
 
     const workDir = join(this.config.dataDir, `scan-${scanId}`);
     mkdirSync(workDir, { recursive: true });
@@ -384,6 +417,26 @@ export class Orchestrator {
       const events = new EventStore(this.db.handle);
       const stats = syncFindingsToGraph(graph, events, deduped, scanId);
       this.db.audit({ actor: 'system', action: 'graph.synced', details: { scanId, ...stats } });
+      // D1/D5: publish discovery events and evaluate trigger rules.
+      if (this.bus !== undefined) {
+        for (const f of deduped) {
+          this.bus.publish('discovery.asset', f.fingerprint, {
+            findingId: f.id, category: f.category, severity: f.severity, asset: f.asset, locator: f.locator,
+          });
+        }
+      }
+      if (this.bus !== undefined && this.scopeGate !== undefined) {
+        for (const f of deduped) {
+          if (!f.provenance.some((p) => p.rawId === 'port-open')) continue;
+          const m = /^([\d.]+):(\d+)$/.exec(f.locator);
+          if (m === null) continue;
+          triggerForPort({
+            ip: m[1]!, port: Number(m[2]),
+            severity: f.severity === 'high' ? 'high' : f.severity === 'medium' ? 'medium' : 'info',
+            origin: target.origin, scope: this.scopeGate, bus: this.bus, profile: this.config.scanProfile,
+          });
+        }
+      }
     } catch (e) {
       log.warn('graph sync failed (scan unaffected)', { scanId, error: e instanceof Error ? e.message : String(e) });
     }

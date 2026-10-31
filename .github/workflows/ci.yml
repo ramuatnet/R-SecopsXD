@@ -1,4 +1,4 @@
-name: CI
+name: ci
 
 on:
   push:
@@ -6,32 +6,20 @@ on:
   pull_request:
 
 jobs:
-  ts:
+  gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
-      - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npm test
-
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check for Rust workspace
-        id: rust
-        run: |
-          if [ -d engine ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.rust.outputs.present == 'true'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - if: steps.rust.outputs.present == 'true'
-        run: cargo test --manifest-path engine/Cargo.toml
-      - if: steps.rust.outputs.present == 'true'
-        run: cargo clippy --manifest-path engine/Cargo.toml -- -D warnings
-      - if: steps.rust.outputs.present == 'true'
-        run: cargo fmt --manifest-path engine/Cargo.toml --check
+          node-version: '24'
+      - name: Install (zero runtime deps — lockfile only for tooling)
+        run: npm ci || npm install
+      - name: Template pack lint (N3/N7/N9 — a template without '# source:' fails the gate)
+        run: npm run lint:templates
+      - name: Typecheck (strict strip-only TS)
+        run: npx tsc --noEmit
+      - name: Canary — parser mapping + integrity (N10)
+        run: npm run canary
+      - name: Test suite (includes egress-audit of nuclei argv, G4)
+        run: npm test

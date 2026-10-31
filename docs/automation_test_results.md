@@ -252,3 +252,37 @@ identical CVE-9.8/EPSS-0.6 → 100 at the edge vs 4 on an isolated internal box 
 events; cross-scan dedupe merged the repeat observation (times_seen=2); graph.synced audited.
 Suite: **238/238**. Sensors (E1), credentialed SSH/WinRM (E4), cloud metadata merge (E5) need
 external infrastructure — interfaces documented, not faked.
+
+## newtask.md wiring: closed loop, live governor, planner, risk-in-reports, CI (2026-10-31)
+
+**D3-live (G2):** `ScopedHttpClient` now takes an optional `GovernorBinding` — every request
+acquires from the process-wide SafetyGovernor (per-host asset keys, scan-bound ceilings) and feeds
+responses back for adaptive throttle. Rate-limit refusals WAIT (`acquireWait`, bounded 30s) so
+engines run at the profile's pace instead of silently dropping probes; kill switch / scan ceiling /
+circuit breaker refuse hard. `OWASP_SCAN_PROFILE=gentle|normal|aggressive` selects ceilings
+(100/500/2000 requests per scan). G2 load test: gentle profile throttles a 120-request burst to the
+ceiling, blocked requests are honest, counter exact.
+
+**D5-live (closed loop):** the orchestrator publishes `discovery.asset` for every finding and
+evaluates trigger rules on port-open findings (scope-approved origins only). `ScanRequestDispatcher`
+subscribes to `scan.request` and auto-starts scans for APPROVED registered targets — never while a
+scan is active for that target, never more than one per hour per target, never for unregistered
+origins (I13 holds). Scope records are approved authoritatively at scan start.
+
+**E3-live:** path-probe derives the product from crawl Server/X-Powered-By headers and merges
+planner payload-family paths (deduped, bounded 8). Live: `insecure-express-clone → families [node],
++2 paths`.
+
+**E2:** `os-hint` findings now land as `os` nodes with `ip runs os` edges (banner-derived, low
+confidence by design).
+
+**F1/F4:** every finding in the JSON and HTML reports carries an explainable risk object —
+score, band, all five factors, confirmation signals, backlog flag. Blast factor is neutral (1.0)
+when no graph fan-out measurement exists; the log-fit factor applies when it does. `riskSummary`
+bands in the JSON report.
+
+**G1:** `precisionRecallByClass` — per-class P/R/F1 over labeled examples.
+**G4:** `.github/workflows/ci.yml` — lint:templates → tsc → canary → full suite on every push/PR
+(template without `# source:` fails the gate; egress audit runs inside the suite).
+
+Suite: **246/246**. Server re-validated live (dispatcher started, planner fired, graph synced).

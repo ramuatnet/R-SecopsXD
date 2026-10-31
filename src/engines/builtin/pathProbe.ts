@@ -11,6 +11,7 @@
  * This is NOT a brute-force wordlist attack: at most ~15 requests per scan.
  */
 import type { Engine, EngineAvailability, EngineRunResult, ScanContext } from '../types.ts';
+import { planFor } from '../../orchestration/planner.ts';
 import { cap } from '../types.ts';
 import type { EngineInfo, RawFinding } from '../../core/types.ts';
 import { redactText } from '../../core/redact.ts';
@@ -98,6 +99,30 @@ export class PathProbeEngine implements Engine {
       ];
       candidates.push(...JAVA_PATHS);
       ctx.log('server-aware probing', { server: serverBanner, extraPaths: JAVA_PATHS.length });
+    }
+
+    // E3 (newtask): planner-driven paths — fingerprint the observed server
+    // software and merge the payload-family probe paths (deduped, bounded).
+    const poweredBy = (ctx.crawl?.pages ?? [])
+      .map((p) => p.headers['x-powered-by'] ?? '')
+      .find((v) => v !== '') ?? '';
+    const product = serverBanner.split('/')[0]?.trim() || poweredBy.split('(')[0]?.trim() || '';
+    if (product !== '') {
+      const families = planFor({ ip: 'target', port: Number(new URL(origin).port) || 80, service: 'http', product });
+      const known = new Set(candidates.map((c) => c.path));
+      const plannerPaths: ProbeCandidate[] = [];
+      for (const family of families) {
+        for (const path of family.probePaths) {
+          if (plannerPaths.length >= 8) break;
+          if (known.has(path)) continue;
+          known.add(path);
+          plannerPaths.push({ path, title: `${family.capability} surface check: ${path}`, category: 'A02', cwe: 16, severity: 'low' });
+        }
+      }
+      if (plannerPaths.length > 0) {
+        candidates.push(...plannerPaths);
+        ctx.log('planner-driven probing', { product, families: families.map((f) => f.capability), extraPaths: plannerPaths.length });
+      }
     }
     let probes = 0;
 
