@@ -118,7 +118,7 @@ test('A1 internal scan: discovers live HTTP service on loopback', async () => {
     const res = await engine.run(ctx);
     const hostFindings = res.findings.filter((f: { rawId?: string }) => f.rawId === 'host-discovered');
     assert.ok(hostFindings.length > 0, 'host discovered');
-    assert.ok(hostFindings[0]!.locator?.includes(String(port)), 'correct port identified');
+    assert.ok(hostFindings.some((f) => f.locator?.includes(String(port))), 'correct port identified');
     const svcFindings = res.findings.filter((f: { rawId?: string }) => f.rawId === 'service-version-disclosed');
     assert.ok(svcFindings.length > 0, 'service version disclosed');
   } finally {

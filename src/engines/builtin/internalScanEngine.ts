@@ -171,7 +171,7 @@ export class InternalScanEngine implements Engine {
 
       for (const port of ports) {
         if (ctx.signal.aborted) break;
-        const { open, banner } = await scanPort(ip, port, 2000);
+        const { open, banner } = await scanPort(ip, port, 5000);
         if (!open) continue;
 
         const fp = fingerprint(port, banner ?? '');
