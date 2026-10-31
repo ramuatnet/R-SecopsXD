@@ -417,3 +417,27 @@ The W1–W10 concerns and Phases H–N were implemented in the prescribed sequen
 - A green runner CI exists ✅ (K2 — two green runs + URLs)
 - Risk base is real for CVE-bearing findings ✅ (L1, base_source explicit)
 - Recall and precision appear in reports (opt-in truth) ✅ (I3)
+
+---
+
+## hardtask.md closing pass — the three letter-level nuances closed (2026-10-31, c31dfb2)
+
+1. **M3 now CI-tested for real**: `ci.yml` runs a `postgres:16` **service container** with ltree +
+   the graph DDL applied and a trust `pocuser` provisioned by the workflow itself — the DDL drift
+   gate and the Postgres wire-protocol PoC **execute on the runner** (previously they skipped
+   there). The setup script was validated against a fresh container before landing:
+   `C1 wire write PASS`, `M3 drift gate PASS` from scratch.
+2. **K3 runner-visible**: a workflow step plants a template without `# source:`, asserts
+   `lintTemplates` finds violations (exit non-zero otherwise), making the gate block visible in
+   the run log — in addition to the existing unit test.
+3. **I3 every report**: the **HTML** report now renders an Assessment-quality table (recall /
+   precision with matched truth IDs when ground truth is supplied via `?truth=`, an honest
+   "not computed" line otherwise) and takes graph fan-out for the blast factor, matching the
+   JSON report.
+
+CI: **green** on the closing pass — https://github.com/ramuatnet/R-SecopsXD/actions/runs/41181210447
+(with the Postgres-backed tests executing for the first time on a runner). Suite: 271/271.
+
+Remaining deliberately-unbuilt (unchanged): Temporal worker (zero-dep ADR), Kafka-native client
+(HTTP proxy adapter is the zero-dep path), real-cloud E5, public OOB host (T4.7), advisory snapshot
+refresh cadence (L1 operational item).
