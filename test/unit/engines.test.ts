@@ -216,3 +216,35 @@ test('pageEvidence caps and observes', () => {
   assert.ok((ev.response?.bodyExcerpt ?? '').length <= 400);
   assert.match(ev.observation, /→ 200/);
 });
+
+// ---------- honest-unknown: failed fetches never imply absent headers ----------
+
+test('blocked/failed pages (status 0) produce no header-absence findings', async () => {
+  const engine = new HttpObservationEngine();
+  const blocked: never = { ok: false, blocked: 'redirect blocked: cross-origin redirect denied', url: 'http://127.0.0.1:8899/' } as never;
+  const ctx = webCtx({
+    client: { get: async (_url: string) => blocked } as never,
+    crawl: {
+      pages: [
+        makePage({ url: 'http://127.0.0.1:8899/', status: 0, headers: {}, body: '', links: [] }),
+      ],
+      robots: { disallow: [], fetched: false },
+    },
+  });
+  const res = await engine.run(ctx);
+  const headerFinds = res.findings.filter((f) => f.rawId === 'missing-security-headers' || f.rawId === 'hsts-not-set');
+  assert.equal(headerFinds.length, 0, 'absence must not be inferred from a fetch that never produced a response');
+});
+
+test('crawler emits root-fetch-blocked finding when the root fetch is scope-blocked', async () => {
+  const { CrawlerLiteEngine } = await import('../../src/engines/builtin/crawlerLite.ts');
+  const engine = new CrawlerLiteEngine(20);
+  const blocked: never = { ok: false, blocked: 'redirect blocked: cross-origin redirect denied', url: 'http://127.0.0.1:8899/' } as never;
+  const client = { get: async (_url: string) => blocked, postForm: async () => blocked, postJson: async () => blocked };
+  const guard = { inScope: () => true } as never;
+  const ctx = webCtx({ client: client as never, guard, crawl: { pages: [], robots: { disallow: [], fetched: false } } });
+  const res = await engine.run(ctx);
+  const blockedFindings = res.findings.filter((f) => f.rawId === 'root-fetch-blocked');
+  assert.equal(blockedFindings.length, 1, 'exactly one root-fetch-blocked info finding');
+  assert.match(blockedFindings[0]!.evidence[0]!.kind === 'process' ? blockedFindings[0]!.evidence[0]!.observation : '', /redirect blocked/);
+});

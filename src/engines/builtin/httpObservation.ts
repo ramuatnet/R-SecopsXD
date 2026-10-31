@@ -42,6 +42,10 @@ export class HttpObservationEngine implements Engine {
   async run(ctx: ScanContext): Promise<EngineRunResult> {
     const findings: RawFinding[] = [];
     let pages = ctx.crawl?.pages ?? [];
+    // Status 0 = the fetch failed or was scope-blocked (no real response was
+    // observed). Header/cookie absence must never be inferred from empty
+    // data — unknown stays unknown (I8).
+    pages = pages.filter((p) => p.status !== 0);
     if (pages.length === 0) {
       // No crawler ran before us — observe at least the origin root.
       const res = await ctx.client.get(ctx.target.origin + '/');

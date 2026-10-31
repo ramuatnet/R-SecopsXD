@@ -1,11 +1,12 @@
 /**
  * Built-in crawler-lite: bounded same-origin crawl using plain GETs.
  * Passive mode: only follows discovered links (no wordlists). Fills the
- * shared crawl corpus for observer engines; produces no findings itself.
+ * shared crawl corpus for observer engines; emits one informational finding
+ * when the root fetch itself is scope-blocked (never infers absence from it).
  */
 import type { Engine, EngineAvailability, EngineRunResult, ScanContext, CrawlPage } from '../types.ts';
 import { cap } from '../types.ts';
-import type { EngineInfo } from '../../core/types.ts';
+import type { EngineInfo, RawFinding } from '../../core/types.ts';
 
 const INFO: EngineInfo = {
   id: 'builtin.crawler-lite',
@@ -73,6 +74,7 @@ export class CrawlerLiteEngine implements Engine {
       }
     }
 
+    const blockedFindings: RawFinding[] = [];
     while (queue.length > 0 && corpus.pages.length < this.maxPages && !ctx.signal.aborted) {
       const url = queue.shift()!;
       const res = await ctx.client.get(url);
@@ -84,6 +86,30 @@ export class CrawlerLiteEngine implements Engine {
           for (const fp of FALLBACK_PATHS) {
             enqueue(new URL(fp, origin).toString());
           }
+        }
+        if (!res.ok && 'blocked' in res) {
+          // The root fetch was blocked (e.g. the origin redirects to an
+          // out-of-scope origin such as an SSO IdP). Report it honestly —
+          // downstream observers must not infer "header absent" from a
+          // fetch that never produced a response.
+          blockedFindings.push({
+            rawId: 'root-fetch-blocked',
+            title: 'Root page fetch was blocked by the scope guard — scan results are limited',
+            category: 'A01',
+            severity: 'info',
+            confidence: 'high',
+            status: 'informational',
+            asset: ctx.target.origin,
+            locator: '/',
+            evidence: [{
+              kind: 'process',
+              command: `GET ${url}`,
+              observation: `blocked: ${res.blocked.slice(0, 300)}`,
+            }],
+            explanation: 'The crawler could not fetch the root page. Common cause: the origin redirects to a different origin (e.g. an SSO/IdP host) that is outside the registered target\u2019s scope. Header- and cookie-absence findings are NOT derived from this failed fetch — pages behind the redirect are unobserved, not clean.',
+            remediation: 'If the redirect target belongs to the same assessment scope, register it as its own target (or extend scope); otherwise use authenticated scanning to reach the application behind the redirect.',
+            references: [],
+          });
         }
       }
       // Error pages are captured too — observers need them (e.g. verbose stack traces).
@@ -97,7 +123,7 @@ export class CrawlerLiteEngine implements Engine {
     }
 
     ctx.log('crawl finished', { pages: corpus.pages.length, robotsDisallow: corpus.robots.disallow.length });
-    return { findings: [], version: 'builtin', detail: `${corpus.pages.length} pages crawled (cap ${this.maxPages})` };
+    return { findings: blockedFindings, version: 'builtin', detail: `${corpus.pages.length} pages crawled (cap ${this.maxPages})` };
   }
 }
 

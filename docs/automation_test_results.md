@@ -120,3 +120,18 @@ No category regressed to a higher claim (enforced by the no-inflation test).
   target registration needed for external infrastructure recon.
 - Wired into `standard-active` + `external-dast` profiles (linear path) and seeded in loopRunner
   (loop path, never breaks the scan). Tasks A01-T13, A02-T09, A03-T08 added; coverage v1 map updated.
+
+## Honest-unknown fix: blocked fetches never imply absent headers (2026-10-31)
+
+- Validation of scan 0747af82 (zmail.htcinc.com) exposed an evidence-integrity bug: the root
+  fetch was scope-blocked (302 -> iam.htcinc.com SSO, cross-origin), the crawler recorded the
+  page as status 0 with empty headers, and http-observation then reported ALL security headers
+  as "missing" — absence inferred from no data (violates I8).
+- Fix 1: http-observation filters status-0 pages — header/cookie absence is only ever derived
+  from a real observed response.
+- Fix 2: crawler emits a `root-fetch-blocked` informational finding naming the blocked reason
+  (e.g. "iam.htcinc.com:443 is not zmail.htcinc.com:443") so the operator sees the scope edge
+  instead of an empty report.
+- Verified live: re-scan of zmail now yields exactly the scope-edge finding; the header findings
+  (which were coincidentally true on the raw 302) are no longer claimed from a blocked fetch.
+- Suite: **194/194**
