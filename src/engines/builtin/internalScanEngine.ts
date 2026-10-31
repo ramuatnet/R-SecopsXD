@@ -156,8 +156,13 @@ export class InternalScanEngine implements Engine {
     }
 
     const findings: RawFinding[] = [];
-    const targetPort = ctx.target.origin ? (Number(new URL(ctx.target.origin).port) || (new URL(ctx.target.origin).protocol === 'https:' ? 443 : 80)) : undefined;
-    const ports = [...new Set([80, 443, 8080, 8443, ...(targetPort !== undefined ? [targetPort] : [])])];
+    // For CIDR targets the origin is the CIDR string, not a URL — don't try to parse it.
+    let targetPort: number | undefined;
+    try {
+      const u = new URL(ctx.target.origin);
+      targetPort = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    } catch { /* origin is not a URL — use default port list */ }
+    const ports = [...new Set([80, 443, 8080, 8443, 3000, 5000, 8000, ...(targetPort !== undefined ? [targetPort] : [])])];
     let scanned = 0;
 
     for (const ip of ips) {

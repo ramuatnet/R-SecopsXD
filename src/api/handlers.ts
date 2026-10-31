@@ -81,11 +81,11 @@ export const createTarget = (app: App): Handler => withAuth(app.db.verifyToken.b
     origin = `${parsed!.scheme}://${parsed!.host}:${parsed!.port}`;
   } else if (kind === 'cidr') {
     if (!originRaw) bad(400, 'cidr_required', 'origin is the CIDR block (e.g. 192.168.1.0/24)');
-    // validate CIDR format and reject blocks larger than /24
     const cidrMatch = /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/.exec(originRaw!);
     if (!cidrMatch) bad(400, 'invalid_cidr', 'origin must be a CIDR block like 192.168.1.0/24');
     const prefix = Number(cidrMatch[2]);
     if (prefix < 24 || prefix > 32) bad(400, 'cidr_too_large', 'CIDR block must be /24 or smaller');
+    origin = originRaw!;
   } else if (kind === 'source') {
     if (!sourcePath) bad(400, 'source_path_required', 'sourcePath is required for source targets');
   }
