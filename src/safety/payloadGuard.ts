@@ -50,3 +50,26 @@ export function validateOutbound(
 
 /** Benign marker used for reflection probes (active mode only). */
 export const REFLECTION_MARKER = `ovap-marker-${'a1b2c3d4e5'}`;
+
+// ---------- E2.4 (newtasks.md): safe-exploit tier ----------
+// Exploit payloads are an explicit ALLOWLIST of read-only, reversible probes.
+// Anything outside this list (even if not destructive) stays at `confirmed`
+// and never claims exploit status.
+
+const SAFE_EXPLOIT_SIGNATURES: RegExp[] = [
+  /UNION SELECT version\(\), current_user/i,
+  /\.\.\/\.\.\/\.\.\/etc\/hostname/,
+  /"><svg\/onload=rsecMarker>/,
+  /rsec-canary/,
+];
+
+export function isSafeExploitPayload(payload: string): boolean {
+  // Allowlist first: a known-safe read-only exploit signature is permitted even
+  // when it superficially resembles a destructive pattern (e.g. a bounded
+  // traversal to /etc/hostname). Anything else must clear every destructive rule.
+  if (SAFE_EXPLOIT_SIGNATURES.some((re) => re.test(payload))) return true;
+  for (const [re] of DESTRUCTIVE_PATTERNS) {
+    if (re.test(payload)) return false;
+  }
+  return false;
+}

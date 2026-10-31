@@ -32,6 +32,9 @@ import { SafetyGovernor } from '../safety/governor.ts';
 import { ScopeGate } from '../safety/scopeGate.ts';
 import type { Bus } from '../bus/bus.ts';
 import { triggerForPort } from '../orchestration/assessAsset.ts';
+import { checkWindow, classPermitted, effectiveRateCeiling } from '../safety/engagement.ts';
+import { runExploitStage } from '../exploit/exploit.ts';
+import { TokenBucket } from '../safety/governor.ts';
 import type { GovernorBinding } from './httpClient.ts';
 import { EngineRegistry } from '../engines/registry.ts';
 import { abortError } from '../safety/rateLimiter.ts';
@@ -40,7 +43,7 @@ import { log } from '../logging.ts';
 function emptyStats(): ScanStats {
   return {
     findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0 },
+    findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, exploited: 0, fixed: 0 },
     totalFindings: 0,
     requestsSent: 0,
     requestsBlocked: 0,
@@ -77,9 +80,19 @@ export class Orchestrator {
   }
 
   /** Per-scan governor binding (scanId-bound ceilings, assetKey per host). */
-  private governorBinding(scanId: string): GovernorBinding {
+  private governorBinding(scanId: string, engagementRateCeiling = 0): GovernorBinding {
+    // E1.2: the engagement's rate_ceiling is a per-scan local bucket layered on
+    // top of the global governor (only when the engagement sets one).
+    const local = engagementRateCeiling > 0 ? new TokenBucket(engagementRateCeiling * 2, engagementRateCeiling) : undefined;
     return {
-      acquire: async (assetKey) => this.governor.acquireWait(assetKey, scanId),
+      acquire: async (assetKey) => {
+        const decision = await this.governor.acquireWait(assetKey, scanId);
+        if (!decision.allowed) return decision;
+        if (local !== undefined && !local.tryAcquire()) {
+          return { allowed: false, reason: 'blocked_by_roe: engagement rate ceiling' };
+        }
+        return decision;
+      },
       onResponse: (assetKey, status, latencyMs) => this.governor.onResponse(assetKey, status, latencyMs),
     };
   }
@@ -118,6 +131,17 @@ export class Orchestrator {
       coverage: [],
       stats: emptyStats(),
     };
+    // E1.2/I20 (newtasks.md): engagement window enforcement at the executor —
+    // a scan outside the window is REFUSED with the reason, never silently skipped.
+    const engagement = this.db.engagementForTarget(targetId, target.origin);
+    if (engagement !== undefined) {
+      const win = checkWindow(engagement);
+      if (!win.allowed) {
+        this.db.audit({ actor: 'operator', action: 'scan.blocked_by_roe', details: { targetId, reason: win.reason } });
+        throw new ScopeError(win.reason ?? 'blocked_by_roe');
+      }
+    }
+
     // D4: a started scan on an approved target is the authoritative scope approval.
     if (this.scopeGate !== undefined && target.kind === 'webapp' && target.origin !== '') {
       this.scopeGate.register('origin', target.origin, true);
@@ -186,7 +210,7 @@ export class Orchestrator {
           coverage: result.coverage,
           stats: {
             findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
-            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0 },
+            findingsByStatus: { confirmed: 0, probable: 0, informational: 0, false_positive: 0, rejected_by_verification: 0, untested: 0, exploited: 0, fixed: 0 },
             totalFindings: result.findings.length,
             requestsSent: result.stats.sent,
             requestsBlocked: result.stats.blocked,
@@ -232,10 +256,11 @@ export class Orchestrator {
     const stats: RequestStats = { sent: 0, blocked: 0 };
     const limiter = new RateLimiter(this.config.rateLimitPerSecond, this.config.rateBurst);
     const semaphore = new Semaphore(this.config.maxConcurrency);
+    const engagement = this.db.engagementForTarget(target.id, target.origin);
     const client = new ScopedHttpClient(guard, limiter, semaphore, {
       timeoutMs: this.config.requestTimeoutMs,
       maxRedirectHops: 5,
-    }, stats, signal, this.governorBinding(scanId));
+    }, stats, signal, this.governorBinding(scanId, engagement?.rateCeiling ?? 0));
 
     const workDir = join(this.config.dataDir, `scan-${scanId}`);
     mkdirSync(workDir, { recursive: true });
@@ -397,6 +422,26 @@ export class Orchestrator {
           }
         }
       }
+    }
+
+    // E2 (newtasks.md): exploit stage — confirmed + class-mapped + RoE-permitted
+    // findings are promoted with an impact artefact. Blocked/unavailable counted,
+    // never silent (I19/I20 via the engagement gate).
+    try {
+      const permitted = (klass: Parameters<typeof classPermitted>[1]) =>
+        classPermitted(engagement, klass);
+      const exploitStart = Date.now();
+      const stage = await runExploitStage(findings, client, permitted);
+      engineRecords.push({
+        engine: 'exploit-stage', status: 'ran', findingCount: stage.exploited.length,
+        durationMs: Date.now() - exploitStart, detail: stage.detail,
+      });
+      for (const f of stage.exploited) {
+        this.db.setFindingEnrichment(scanId, f.id, { exploit: f.exploit });
+      }
+      this.db.audit({ actor: 'system', action: 'exploit.stage', details: { scanId, detail: stage.detail } });
+    } catch (e) {
+      engineRecords.push({ engine: 'exploit-stage', status: 'failed', findingCount: 0, durationMs: 0, detail: e instanceof Error ? e.message : String(e) });
     }
 
     // Dedupe across engines (merges provenance), then finalize.

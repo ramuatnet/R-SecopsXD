@@ -9,7 +9,7 @@ import {
   randomUUID, createHash, randomBytes, timingSafeEqual,
   createCipheriv, createDecipheriv, createHmac,
 } from 'node:crypto';
-import type {
+import type { Engagement, 
   AuditEntry, CoverageReport, EngineRunRecord, Finding, Scan, ScanStats, Target,
   ValidationStatus,
 } from '../core/types.ts';
@@ -216,6 +216,34 @@ const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX IF NOT EXISTS idx_graph_events_dedupe
     ON graph_events(class_uid, asset_uid, observable_hash);
   CREATE INDEX IF NOT EXISTS idx_graph_events_asset ON graph_events(asset_uid);
+  `,
+  // 008 (newtasks.md E1-E6): engagement/RoE entity + finding enrichment
+  // (exploit artefacts, retest results, escalation records).
+  `
+  CREATE TABLE IF NOT EXISTS engagements (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    scope_json TEXT NOT NULL DEFAULT '[]',
+    window_start TEXT NOT NULL,
+    window_end TEXT NOT NULL,
+    contacts_technical TEXT NOT NULL DEFAULT '',
+    contacts_emergency TEXT NOT NULL DEFAULT '',
+    emergency_stop INTEGER NOT NULL DEFAULT 0,
+    rate_ceiling INTEGER NOT NULL DEFAULT 0,
+    permitted_classes_json TEXT NOT NULL DEFAULT '[]',
+    signer TEXT NOT NULL DEFAULT '',
+    attestation_ref TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS findings_enrichment (
+    scan_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    exploit_json TEXT,
+    retest_json TEXT,
+    escalate_json TEXT,
+    PRIMARY KEY (scan_id, finding_id)
+  );
   `,
 ];
 
@@ -501,7 +529,76 @@ export class Database {
 
   getFindings(scanId: string): Finding[] {
     const rows = this.db.prepare('SELECT * FROM findings WHERE scan_id = ?').all(scanId) as Array<Record<string, unknown>>;
-    return rows.map(rowToFinding);
+    const enr = this.db.prepare('SELECT * FROM findings_enrichment WHERE scan_id = ?').all(scanId) as Array<Record<string, unknown>>;
+    const byId = new Map(enr.map((r) => [r.finding_id as string, r]));
+    return rows.map((r) => rowToFinding(r, byId.get(r.id as string)));
+  }
+
+  /**
+   * E2/E3/E6 (newtasks.md): persist finding enrichment — exploit artefacts,
+   * retest outcomes, escalation records (separate table; base rows immutable).
+   */
+  setFindingEnrichment(scanId: string, findingId: string, patch: { exploit?: unknown; retest?: unknown; escalate?: unknown }): void {
+    const existing = this.db.prepare('SELECT * FROM findings_enrichment WHERE scan_id = ? AND finding_id = ?').get(scanId, findingId) as Record<string, unknown> | undefined;
+    const cur = existing ?? { scan_id: scanId, finding_id: findingId, exploit_json: null, retest_json: null, escalate_json: null };
+    const enc = (v: unknown, curCol: unknown): string | null => v === undefined ? (curCol as string | null) : JSON.stringify(v);
+    this.db.prepare(
+      `INSERT INTO findings_enrichment (scan_id, finding_id, exploit_json, retest_json, escalate_json)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(scan_id, finding_id) DO UPDATE SET exploit_json = excluded.exploit_json, retest_json = excluded.retest_json, escalate_json = excluded.escalate_json`,
+    ).run(scanId, findingId,
+      enc(patch.exploit, cur.exploit_json),
+      enc(patch.retest, cur.retest_json),
+      enc(patch.escalate, cur.escalate_json));
+    this.audit({ actor: 'system', action: 'finding.enriched', details: { scanId, findingId, keys: Object.keys(patch) } });
+  }
+
+  /** E6.2: escalation queue across all scans. */
+  getEscalated(): Array<{ scanId: string; finding: Finding }> {
+    const rows = this.db.prepare('SELECT scan_id, finding_id, escalate_json, exploit_json, retest_json FROM findings_enrichment WHERE escalate_json IS NOT NULL').all() as Array<Record<string, unknown>>;
+    const out: Array<{ scanId: string; finding: Finding }> = [];
+    for (const r of rows) {
+      const f = this.getFindings(r.scan_id as string).find((x) => x.id === r.finding_id);
+      if (f !== undefined) out.push({ scanId: r.scan_id as string, finding: f });
+    }
+    return out;
+  }
+
+  // ---- engagements (E1) ----
+
+  createEngagement(e: Engagement): Engagement {
+    this.db.prepare(
+      `INSERT INTO engagements (id, name, scope_json, window_start, window_end, contacts_technical, contacts_emergency, emergency_stop, rate_ceiling, permitted_classes_json, signer, attestation_ref, active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(e.id, e.name, JSON.stringify(e.scope), e.windowStart, e.windowEnd, e.contactsTechnical, e.contactsEmergency,
+      e.emergencyStop ? 1 : 0, e.rateCeiling, JSON.stringify(e.permittedClasses), e.signer, e.attestationRef, e.active ? 1 : 0, e.createdAt);
+    this.audit({ actor: 'operator', action: 'engagement.created', details: { engagementId: e.id, scope: e.scope.length } });
+    return e;
+  }
+
+  getEngagement(id: string): Engagement | undefined {
+    const r = this.db.prepare('SELECT * FROM engagements WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return r === undefined ? undefined : rowToEngagement(r);
+  }
+
+  listEngagements(): Engagement[] {
+    const rows = this.db.prepare('SELECT * FROM engagements ORDER BY created_at DESC').all() as Array<Record<string, unknown>>;
+    return rows.map(rowToEngagement);
+  }
+
+  /** E1.4: emergency stop — flag + deactivate; caller aborts in-flight scans. */
+  stopEngagement(id: string): Engagement | undefined {
+    const e = this.getEngagement(id);
+    if (e === undefined) return undefined;
+    this.db.prepare('UPDATE engagements SET emergency_stop = 1, active = 0 WHERE id = ?').run(id);
+    this.audit({ actor: 'operator', action: 'engagement.stopped', details: { engagementId: id } });
+    return this.getEngagement(id);
+  }
+
+  /** The engagement covering a target (by target id or origin in scope). */
+  engagementForTarget(targetId: string, origin: string): Engagement | undefined {
+    return this.listEngagements().find((e) =>
+      e.scope.includes(targetId) || (origin !== '' && e.scope.includes(origin)));
   }
 
   /**
@@ -518,6 +615,11 @@ export class Database {
     ).run(f.fingerprint, status, new Date().toISOString(), note ?? null);
     this.audit({ actor, action: 'finding.triage', details: { findingId, status } });
     return this.getFindings(scanId).find((x) => x.id === findingId);
+  }
+
+  /** E3 (newtasks.md): retest status update — deliberately NOT a triage override. */
+  updateFindingStatus(scanId: string, findingId: string, status: ValidationStatus): void {
+    this.db.prepare('UPDATE findings SET status = ? WHERE scan_id = ? AND id = ?').run(status, scanId, findingId);
   }
 
   getTriages(): Map<string, ValidationStatus> {
@@ -576,8 +678,8 @@ function rowToScan(r: Record<string, unknown>): Scan {
   };
 }
 
-function rowToFinding(r: Record<string, unknown>): Finding {
-  return {
+function rowToFinding(r: Record<string, unknown>, enr?: Record<string, unknown>): Finding {
+  const base: Finding = {
     id: r.id as string,
     fingerprint: r.fingerprint as string,
     title: r.title as string,
@@ -596,6 +698,31 @@ function rowToFinding(r: Record<string, unknown>): Finding {
     references: JSON.parse(r.references_json as string),
     detectedAt: r.detected_at as string,
     provenance: JSON.parse(r.provenance_json as string),
+  };
+  if (enr !== undefined) {
+    if (enr.exploit_json !== null && enr.exploit_json !== undefined) base.exploit = JSON.parse(enr.exploit_json as string) as Finding['exploit'];
+    if (enr.retest_json !== null && enr.retest_json !== undefined) base.retest = JSON.parse(enr.retest_json as string) as Finding['retest'];
+    if (enr.escalate_json !== null && enr.escalate_json !== undefined) base.escalate = JSON.parse(enr.escalate_json as string) as Finding['escalate'];
+  }
+  return base;
+}
+
+function rowToEngagement(r: Record<string, unknown>): Engagement {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    scope: JSON.parse(r.scope_json as string) as string[],
+    windowStart: r.window_start as string,
+    windowEnd: r.window_end as string,
+    contactsTechnical: r.contacts_technical as string,
+    contactsEmergency: r.contacts_emergency as string,
+    emergencyStop: r.emergency_stop === 1,
+    rateCeiling: r.rate_ceiling as number,
+    permittedClasses: JSON.parse(r.permitted_classes_json as string) as Engagement['permittedClasses'],
+    signer: r.signer as string,
+    attestationRef: r.attestation_ref as string,
+    active: r.active === 1,
+    createdAt: r.created_at as string,
   };
 }
 

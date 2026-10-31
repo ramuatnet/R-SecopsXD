@@ -12,6 +12,7 @@ import { InProcessBus } from './bus/bus.ts';
 import { ScopeGate } from './safety/scopeGate.ts';
 import { SafetyGovernor } from './safety/governor.ts';
 import { ScanRequestDispatcher } from './orchestration/dispatcher.ts';
+import { RetestService } from './retest/retest.ts';
 import { Router, errorResponse, jsonResponse, ApiError, type Handler, type RequestContext } from './api/router.ts';
 import { withAuth } from './api/auth.ts';
 import * as h from './api/handlers.ts';
@@ -81,7 +82,8 @@ export function buildPlatform(config = loadConfig()): Platform {
   writeFileSync(tokenFile, token, { flag: 'w' });
   db.setAuthToken(token);
 
-  const app: h.App = { config, db, orchestrator, registry, version: VERSION };
+  const retest = new RetestService(db, config, 5);
+  const app: h.App = { config, db, orchestrator, registry, version: VERSION, retest };
   const authed = (handler: Handler): Handler => withAuth(db.verifyToken.bind(db), handler);
 
   const router = new Router();
@@ -106,6 +108,12 @@ export function buildPlatform(config = loadConfig()): Platform {
   router.get('/api/scans/:id/findings', authed(h.listFindings(app)));
   router.post('/api/scans/:scanId/findings/:findingId/status', authed(h.triageFinding(app)));
   router.get('/api/scans/:id/report', authed(h.getReport(app)));
+  router.post('/api/engagements', authed(h.createEngagement(app)));
+  router.get('/api/engagements/:id', authed(h.getEngagement(app)));
+  router.post('/api/engagements/:id/stop', authed(h.stopEngagement(app)));
+  router.post('/api/targets/:id/retest', authed(h.retestTarget(app)));
+  router.post('/api/scans/:id/findings/:fid/escalate', authed(h.escalateFinding(app)));
+  router.get('/api/escalations', authed(h.listEscalations(app)));
   router.get('/api/audit', authed(h.listAudit(app)));
 
   return { config, db, registry, orchestrator, token, router };

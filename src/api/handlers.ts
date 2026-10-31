@@ -15,6 +15,10 @@ import type { Finding,  OwaspCategory, ScanMode, Target, ValidationStatus } from
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderReport } from '../reports/registry.ts';
+import { buildDeliverableReport } from '../reports/deliverable.ts';
+import { RetestService } from '../retest/retest.ts';
+import type { Engagement, ExploitClass } from '../core/types.ts';
+import { randomUUID } from 'node:crypto';
 import { GraphStore } from '../graph/graph.ts';
 import { assetUid } from '../graph/uid.ts';
 import { scoreAgainstTruth, type ScanQuality } from '../verify/metrics.ts';
@@ -27,6 +31,7 @@ export interface App {
   orchestrator: Orchestrator;
   registry: EngineRegistry;
   version: string;
+  retest: RetestService;
 }
 
 // ---------- helpers ----------
@@ -223,7 +228,7 @@ export function listAudit(app: App): Handler {
   return () => jsonResponse({ entries: app.db.listAudit(200) });
 }
 
-export const getReport = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), (ctx: RequestContext) => {
+export const getReport = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
   const scan = app.db.getScan(ctx.params.id!);
   if (!scan) bad(404, 'not_found', 'scan not found');
   const format = (ctx.url.searchParams.get('format') ?? 'json').toLowerCase();
@@ -241,6 +246,37 @@ export const getReport = (app: App): Handler => withAuth(app.db.verifyToken.bind
         const truth = JSON.parse(readFileSync(join(process.cwd(), truthPath), 'utf8')) as { items?: Array<{ id?: string; match?: { cwe?: number; locatorContains?: string; titleContains?: string; port?: number } }> };
         quality = scoreAgainstTruth(findings, truth.items ?? []);
       } catch { /* truth file unreadable — quality stays unavailable */ }
+    }
+    if (format === 'deliverable') {
+      // E4.2 (newtasks.md): blocked without a signed engagement — a stated
+      // reason, never an empty report.
+      const engagement = app.db.engagementForTarget(scan.targetId, scan.targetName);
+      if (engagement === undefined || engagement.signer === '' || engagement.attestationRef === '') {
+        bad(400, 'blocked_by_roe', 'deliverable report requires a signed engagement (signer + attestation_ref) covering this target — none found');
+      }
+      const { html } = buildDeliverableReport({ scan, findings, engagement });
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'content-disposition': 'attachment; filename="deliverable-' + scan.id.slice(0, 8) + '.html"' } });
+    }
+    if (format === 'evidence-pack') {
+      // E5: evidence pack — timestamps, control ids, retest status, coverage
+      // verdicts; unmapped categories appear as gaps.
+      const { controlsForCategory } = await import('../compliance/controls.ts');
+      const pack = {
+        schema: 'rsec/evidence-pack/1',
+        generatedAt: new Date().toISOString(),
+        scan: { id: scan.id, target: scan.targetName, started: scan.startedAt, finished: scan.finishedAt, mode: scan.mode, profile: scan.profile },
+        engagement: app.db.engagementForTarget(scan.targetId, scan.targetName) ?? null,
+        findings: findings.map((f) => ({
+          id: f.id, title: f.title, category: f.category, severity: f.severity, status: f.status,
+          detectedAt: f.detectedAt,
+          retest: f.retest ?? null,
+          exploit: f.exploit ?? null,
+          controls: controlsForCategory(f.category),
+        })),
+        coverage: scan.coverage.map((c) => ({ ...c, controls: controlsForCategory(c.category) })),
+        gaps: scan.coverage.filter((c) => c.verdict === 'manual-only').map((c) => c.category),
+      };
+      return jsonResponse(pack);
     }
     const report: string | Uint8Array = renderReport(scan, findings, format, new Date().toISOString(), { fanoutOf, quality });
     const mime = format === 'pdf' ? 'application/pdf'
@@ -411,3 +447,99 @@ export function methodNotAllowed(): Handler {
 }
 
 export type { OwaspCategory };
+
+
+// ---------- E1: engagements (newtasks.md) ----------
+
+export const createEngagement = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const body = await readJsonBody(ctx.req) as Record<string, unknown>;
+  const name = asString(body.name);
+  const scope = Array.isArray(body.scope) ? body.scope.map(String) : undefined;
+  const windowStart = asString(body.windowStart);
+  const windowEnd = asString(body.windowEnd);
+  if (name === undefined || scope === undefined || scope.length === 0) bad(400, 'engagement_fields', 'name and non-empty scope are required');
+  if (windowStart === undefined || windowEnd === undefined || Number.isNaN(Date.parse(windowStart)) || Number.isNaN(Date.parse(windowEnd))) {
+    bad(400, 'engagement_window', 'windowStart/windowEnd must be ISO timestamps');
+  }
+  const permitted = Array.isArray(body.permittedClasses) ? (body.permittedClasses as unknown[]).map(String) : [];
+  const permittedClasses = permitted.filter((c): c is ExploitClass => ['sqli', 'ssrf', 'traversal', 'idor', 'xss-reflection', 'open-redirect'].includes(c));
+  const engagement: Engagement = {
+    id: randomUUID(),
+    name: name as string,
+    scope: scope as string[],
+    windowStart: windowStart as string,
+    windowEnd: windowEnd as string,
+    contactsTechnical: asString(body.contactsTechnical) ?? '',
+    contactsEmergency: asString(body.contactsEmergency) ?? '',
+    emergencyStop: false,
+    rateCeiling: typeof body.rateCeiling === 'number' ? body.rateCeiling : 0,
+    permittedClasses,
+    signer: asString(body.signer) ?? '',
+    attestationRef: asString(body.attestationRef) ?? '',
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+  const created = app.db.createEngagement(engagement);
+  return jsonResponse({ engagement: created }, 201);
+});
+
+export const getEngagement = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const e = app.db.getEngagement(ctx.params.id as string);
+  if (e === undefined) bad(404, 'not_found', 'engagement not found');
+  return jsonResponse({ engagement: e });
+});
+
+export const stopEngagement = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const e = app.db.stopEngagement(ctx.params.id as string);
+  if (e === undefined) bad(404, 'not_found', 'engagement not found');
+  // E1.4: emergency stop aborts all in-flight scans for the engagement scope.
+  const scopeSet = new Set(e.scope);
+  let cancelled = 0;
+  for (const scan of app.db.listScans(100)) {
+    if (!['queued', 'running'].includes(scan.status)) continue;
+    const t = app.db.getTarget(scan.targetId);
+    if (t === undefined) continue;
+    if (scopeSet.has(t.id) || scopeSet.has(t.origin)) {
+      if (app.orchestrator.cancelScan(scan.id)) cancelled += 1;
+    }
+  }
+  return jsonResponse({ engagement: e, cancelled });
+});
+
+// ---------- E3: fix-triggered retest ----------
+
+export const retestTarget = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const body = await readJsonBody(ctx.req) as Record<string, unknown>;
+  const locator = asString(body.locator);
+  const outcomes = await app.retest.retest(ctx.params.id as string, locator);
+  return jsonResponse({ outcomes });
+});
+
+// ---------- E6: escalation queue ----------
+
+export const escalateFinding = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async (ctx: RequestContext) => {
+  const body = await readJsonBody(ctx.req) as Record<string, unknown>;
+  const reason = asString(body.reason);
+  if (reason === undefined) bad(400, 'reason_required', 'escalation reason is required');
+  const scanId = ctx.params.id as string;
+  const findingId = ctx.params.fid as string;
+  const finding = app.db.getFindings(scanId).find((x) => x.id === findingId);
+  if (finding === undefined) bad(404, 'not_found', 'finding not found');
+  const escalate = { reason: reason as string, context: asString(body.context) ?? '', at: new Date().toISOString(), by: 'operator' };
+  app.db.setFindingEnrichment(scanId, findingId, { escalate });
+  return jsonResponse({ escalated: true, findingId, escalate });
+});
+
+export const listEscalations = (app: App): Handler => withAuth(app.db.verifyToken.bind(app.db), async () => {
+  const queue = app.db.getEscalated();
+  return jsonResponse({ queue: queue.map((q) => ({
+    scanId: q.scanId,
+    findingId: q.finding.id,
+    title: q.finding.title,
+    asset: q.finding.asset,
+    locator: q.finding.locator,
+    escalate: q.finding.escalate,
+    evidenceCount: q.finding.evidence.length,
+    why: q.finding.escalate !== undefined && q.finding.escalate.context !== '' ? q.finding.escalate.context : 'business logic / chained impact / ambiguous authorization',
+  })) });
+});

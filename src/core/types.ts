@@ -24,7 +24,7 @@ export type Confidence = 'high' | 'medium' | 'low';
  * - untested: check not executed for this target/mode
  */
 export type ValidationStatus =
-  | 'confirmed' | 'probable' | 'informational' | 'false_positive' | 'rejected_by_verification' | 'untested';
+  | 'confirmed' | 'probable' | 'informational' | 'false_positive' | 'rejected_by_verification' | 'untested' | 'exploited' | 'fixed';
 
 export type ScanMode = 'passive' | 'active';
 
@@ -102,6 +102,52 @@ export interface Provenance {
   adapter: boolean;
 }
 
+export type ExploitClass = 'sqli' | 'ssrf' | 'traversal' | 'idor' | 'xss-reflection' | 'open-redirect';
+
+export interface Engagement {
+  id: string;
+  name: string;
+  /** Target ids and/or origins in scope (E1.1). */
+  scope: string[];
+  windowStart: string;
+  windowEnd: string;
+  contactsTechnical: string;
+  contactsEmergency: string;
+  emergencyStop: boolean;
+  /** Requests/second ceiling override (0 = profile default). */
+  rateCeiling: number;
+  /** E1.1/I19: exploit classes permitted — [] = read-only. */
+  permittedClasses: ExploitClass[];
+  signer: string;
+  attestationRef: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface ExploitArtefact {
+  klass: string;
+  impact: string;
+  reversible: boolean;
+  requests: number;
+  observedDelta: string;
+  /** E2.2: ≤3 requests; transcript lives in evidence with request/response pairs. */
+  requestCount: number;
+}
+
+export interface RetestResult {
+  result: 'fixed' | 'regressed' | 'inconclusive';
+  at: string;
+  note: string;
+  verifier: string;
+}
+
+export interface EscalationInfo {
+  reason: string;
+  context: string;
+  at: string;
+  by: string;
+}
+
 export interface Finding {
   /** Stable content-hash ID, e.g. "FND-A05-3F9KQ2T7B8". Same issue+asset => same ID. */
   id: string;
@@ -125,6 +171,14 @@ export interface Finding {
   references: string[];
   detectedAt: string;
   provenance: Provenance[];
+  /** E2 (newtasks.md): demonstrated-impact artefact — only with exploit status. */
+  exploit?: ExploitArtefact | undefined;
+  /** E2.5: explicit reason when no exploiter exists for the class. */
+  exploitUnavailable?: string | undefined;
+  /** E3: fix-triggered retest outcome. */
+  retest?: RetestResult | undefined;
+  /** E6: human escalation — excluded from auto-close on retest. */
+  escalate?: EscalationInfo | undefined;
 }
 
 export type EngineStatus = 'ran' | 'unavailable' | 'failed' | 'skipped' | 'cancelled';
