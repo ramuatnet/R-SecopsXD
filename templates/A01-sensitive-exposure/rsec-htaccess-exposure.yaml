@@ -25,6 +25,5 @@ http:
           - "AuthType"
         condition: or
       - type: status
-        part: status
         status:
           - 200

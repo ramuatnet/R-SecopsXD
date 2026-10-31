@@ -1,10 +1,10 @@
 {
   "schema": "rsec-nuclei-pin/1",
-  "version": "",
+  "version": "3.11.1",
   "sha256": {
-    "win32": "",
+    "win32": "73d5e5b0dde9ea5d5fc15dcc34c756148ccae20dc431a21e611af11b8649b480",
     "linux": "",
     "darwin": ""
   },
-  "note": "Fill version and sha256 for the deployed platform at install time. Empty version = integrity check reports 'unpinned' honestly instead of failing. The adapter fails closed on a version or hash mismatch."
+  "note": "Pinned 2026-10-31: nuclei v3.11.1 official release (github.com/projectdiscovery/nuclei/releases/tag/v3.11.1), windows-amd64 zip. The adapter fails closed on version or hash mismatch (N6)."
 }

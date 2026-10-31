@@ -25,6 +25,5 @@ http:
           - "SQLite format 3"
         condition: or
       - type: status
-        part: status
         status:
           - 200

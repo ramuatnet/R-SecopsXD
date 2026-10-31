@@ -286,3 +286,41 @@ bands in the JSON report.
 (template without `# source:` fails the gate; egress audit runs inside the suite).
 
 Suite: **246/246**. Server re-validated live (dispatcher started, planner fired, graph synced).
+
+## newtask.md pending items completed: nuclei pinned+live, Postgres deployed, sensors, determinism (2026-10-31)
+
+**B2 — pinned binary installed and the pack runs for real:**
+- nuclei v3.11.1 official release installed on PATH; version + SHA-256
+  (73d5e5b0…49b480) pinned in `templates/nuclei-pin.json` — the adapter verifies both at startup and
+  fails closed on mismatch (N6).
+- Two real defects found and fixed by running the binary:
+  1. `part: status` on status matchers silently breaks matching in nuclei v3 — removed from the
+     generator, pack regenerated, linter exempts status matchers from the part rule.
+  2. nuclei emits `classification.cwe-id` lowercase (`cwe-538`) — CWE parsing made case-insensitive.
+- Live validation: parser canary OK; binary integrity OK; execution canary 39 templates exit 0;
+  positive control (planted .git/config + .env) → both detected, correct severity/CWE/locator;
+  clean-fixture control → zero false positives; external-dast API scan → `adapter.nuclei ran,
+  1 match from 39 in-house templates (2 capability-gated off)` — found the real /assets/ directory
+  listing (CWE-548) on the fixture, deduped with path-probe's identical finding.
+- Permanent tests: `test/unit/nuclei-live.test.ts` (3 tests; skip honestly when the binary is absent).
+
+**C1 — Postgres deployment proven:** postgres:16 container; `db/postgres/001_asset_graph.sql`
+applied cleanly (ltree extension, 3 tables, all indexes incl. partial open-edge indexes); the
+(class_uid, asset_uid, observable_hash) dedupe unique index and finding→asset FK verified by
+insert/reject smoke test. The DDL artifact is now a validated deployment, not just a document.
+
+**E1 — sensor registry (registration half):** `src/orchestration/sensors.ts` — three tiers
+(external / internal / cloud-readonly), tier validation, capability declaration, heartbeats with
+5-minute staleness, claim counting, capability-based pick (round-robin by claim count), and every
+registered sensor becomes a `sensor` node in the asset graph. Containers pulling from the bus
+register through this same surface when the distributed deployment lands.
+
+**G3 — determinism gate:** explicit tests that planner output, trigger-rule decisions and UIDs are
+byte-stable across runs.
+
+Suite: **253/253** (waitForScan budget raised to 180s — semgrep/trivy legitimately exceed 90s under
+host load; passes in ~76s idle).
+
+**Still genuinely blocked on external inputs (documented, not faked):** Kafka/Redpanda + Temporal
+deployment (in-process equivalents run today; zero-runtime-dep constraint rules out a JS Kafka
+client), SSH/WinRM credentials (E4), cloud API credentials (E5), public OOB infrastructure (T4.7).

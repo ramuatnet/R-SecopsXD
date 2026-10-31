@@ -68,7 +68,7 @@ async function scanTarget(origin: string, profile: string, mode: 'passive' | 'ac
   return { scan: final, findings };
 }
 
-async function waitForScan(scanId: string, timeoutMs = 90_000): Promise<Scan> {
+async function waitForScan(scanId: string, timeoutMs = 180_000): Promise<Scan> {
   const start = Date.now();
   for (;;) {
     const scan = platform.db.getScan(scanId);

@@ -24,6 +24,5 @@ http:
           - "property"
         condition: and
       - type: status
-        part: status
         status:
           - 200

@@ -24,6 +24,5 @@ http:
           - "jboss.admin"
         condition: or
       - type: status
-        part: status
         status:
           - 200

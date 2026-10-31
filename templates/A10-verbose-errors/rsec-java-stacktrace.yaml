@@ -25,6 +25,5 @@ http:
           - "java.lang.Exception"
         condition: or
       - type: status
-        part: status
         status:
           - 500

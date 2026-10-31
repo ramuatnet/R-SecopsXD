@@ -48,10 +48,12 @@ export function lintTemplates(dir: string, violations: Violation[] = []): Violat
       violations.push({ file: rel, rule: 'required-tag', detail: 'info.tags must include "rsec"' });
     }
 
-    // every matcher must declare type AND part (N3)
+    // every matcher must declare type AND part (N3) — status matchers exempt
+    // (they carry no part in nuclei v3; part: status silently breaks matching)
     const lines = text.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      if (/^\s*-\s*type:\s*\S+/.test(lines[i] ?? '')) {
+      const typeM = /^\s*-\s*type:\s*(\S+)/.exec(lines[i] ?? '');
+      if (typeM !== null && typeM[1] !== 'status') {
         const block = lines.slice(i + 1, i + 9).join('\n');
         if (!/^\s+part:\s*\S+/m.test(block)) {
           violations.push({ file: rel, rule: 'matcher-part', detail: `matcher at line ${i + 1} lacks "part:"` });

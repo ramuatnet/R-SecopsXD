@@ -156,7 +156,7 @@ function nucleiSeverity(s: string | undefined): Severity {
 function parseCwe(ids: string[] | undefined): number | undefined {
   const first = ids?.[0];
   if (!first) return undefined;
-  const m = /CWE-(\d+)/.exec(first);
+  const m = /CWE-(\d+)/i.exec(first);
   return m ? Number(m[1]) : undefined;
 }
 

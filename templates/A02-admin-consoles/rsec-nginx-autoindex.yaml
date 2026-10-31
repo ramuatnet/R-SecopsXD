@@ -26,6 +26,5 @@ http:
           - "Directory listing for"
         condition: or
       - type: status
-        part: status
         status:
           - 200

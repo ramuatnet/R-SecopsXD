@@ -25,6 +25,5 @@ http:
           - "access-control-allow-origin: https://evil.example"
         condition: and
       - type: status
-        part: status
         status:
           - 200

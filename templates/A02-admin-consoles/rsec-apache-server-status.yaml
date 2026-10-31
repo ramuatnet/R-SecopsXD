@@ -23,6 +23,5 @@ http:
           - "Apache Server Status"
         condition: and
       - type: status
-        part: status
         status:
           - 200

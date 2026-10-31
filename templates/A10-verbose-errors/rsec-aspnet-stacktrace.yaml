@@ -24,6 +24,5 @@ http:
           - "Stack Trace"
         condition: and
       - type: status
-        part: status
         status:
           - 500

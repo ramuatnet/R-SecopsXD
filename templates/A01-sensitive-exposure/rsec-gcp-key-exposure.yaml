@@ -25,6 +25,5 @@ http:
           - "service_account"
         condition: and
       - type: status
-        part: status
         status:
           - 200

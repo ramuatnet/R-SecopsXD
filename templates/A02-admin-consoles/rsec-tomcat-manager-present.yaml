@@ -24,6 +24,5 @@ http:
           - "Tomcat"
         condition: and
       - type: status
-        part: status
         status:
           - 401

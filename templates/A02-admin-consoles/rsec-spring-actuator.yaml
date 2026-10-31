@@ -25,6 +25,5 @@ http:
           - ""self""
         condition: and
       - type: status
-        part: status
         status:
           - 200

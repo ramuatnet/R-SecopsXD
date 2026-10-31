@@ -161,7 +161,6 @@ def render(t):
                 lines.append(f'          - "{w}"')
             lines.append(f'        condition: {cond}')
         lines.append('      - type: status')
-        lines.append('        part: status')
         lines.append('        status:')
         for st in t['statuses']:
             lines.append(f'          - {st}')

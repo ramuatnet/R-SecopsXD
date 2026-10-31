@@ -24,6 +24,5 @@ http:
           - "Warning:"
         condition: or
       - type: status
-        part: status
         status:
           - 500
