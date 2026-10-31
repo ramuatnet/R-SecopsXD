@@ -469,3 +469,36 @@ refresh cadence (L1 operational item).
 - **E6 Escalation**: `POST .../findings/:fid/escalate` + `GET /api/escalations` — context payload,
   preserved through retests.
 - CI green: https://github.com/ramuatnet/R-SecopsXD/actions/runs/41189922135. Suite: **279/279**.
+
+---
+
+## edgetask.md — edge-context pipeline (2026-10-31, 9c738cf, CI green 41196969351)
+
+All P0/P1/P2/P3 delta tasks implemented per §15. See ARCHITECTURE.md for the
+pipeline diagram, responsibility matrix, and implementation map.
+
+- **EDGE-01**: quorum classifier — favicon alone never wins; two weak signals never win; one
+  strong (≥0.30) does. Five vendor packs (cloudflare/cloudfront/fastly/akamai/azurefd).
+- **EDGE-02**: IP-range feed + staleness TTL — stale ⇒ confidence ×0.7 + engine.degraded.
+- **EDGE-03**: `Finding.surface` ∈ {edge, origin, unknown}; orchestrator stamps edge surface;
+  edge observations never produce origin findings. Origin-not-assessed gap on every category.
+- **EDGE-04**: scope manifest (§1.1) + shared-IP guard — manifest port subset on edge IPs;
+  (hostname, vantage) attribution, never the bare IP; bus-ingress rejection semantics.
+- **EDGE-05**: suppression engine — `cf-proxied-http-8080@v3` (informational edge-proxy-behavior),
+  `edge-unverified-9200@v1` (candidate downgrade), `redirect-301-not-evidence@v1`; rule-active
+  flags + audit records; escalated findings always win.
+- **EDGE-06**: static/form-less pages cap header findings at low; HSTS ≤ medium.
+- **HON-01**: `EngineRunResult.degraded` → `NOT_EXECUTED_DEGRADED` ledger state, never clean.
+- **HON-02**: `NO_OP_SUSPECT` for 0-input/sub-5ms runs (findings ⇒ inputs consumed, duration
+  irrelevant — warm-corpus runs in 4ms are real work).
+- **HON-03**: ledger over the canonical enum; `covered` requires every required task RAN_*.
+- **HON-04**: count reconciliation `{engine_totals, final, deltas[], balanced}` in every scan;
+  unbalanced ⇒ ASSESSMENT_FAILED annotation.
+- **ORIG-01..04**: passive candidates (manifest-gated), Host/SNI verify (cert/title/body hash
+  compare vs edge), human approval gate, unreachable origin = limitation not clean.
+- **PLT-01**: 13 canonical topics on the bus. **PLT-03**: rule-active flags + audit.
+- **PLT-04**: ARCHITECTURE.md. **PLT-06**: deliverable edge-proxy section + diff gains suppressed.
+- **PLT-02** (Temporal sidecar): state machine is worker-shaped; SDK remains ADR-blocked —
+  documented in ARCHITECTURE.md, not faked.
+
+Suite: 293 (289 pass + 4 honest environment skips). CI green: 41196969351.
